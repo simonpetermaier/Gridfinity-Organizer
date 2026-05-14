@@ -77,7 +77,7 @@ app.delete('/api/locations/:id', async (req, res) => {
 app.get('/api/locations/:id/bins', async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT b.*, bt.name AS box_type_name, bt.grid_width, bt.grid_length
+      `SELECT b.*, bt.name AS box_type_name
        FROM bins b
        LEFT JOIN box_types bt ON b.box_type_id = bt.id
        WHERE b.location_id = $1
@@ -138,7 +138,7 @@ app.get('/api/bins/search', async (req, res) => {
     const r = await pool.query(
       `SELECT b.*,
               l.cabinet_id, l.drawer_id,
-              bt.name AS box_type_name, bt.grid_width, bt.grid_length, bt.is_divided, bt.compartments
+              bt.name AS box_type_name, bt.is_divided, bt.compartments
        FROM bins b
        LEFT JOIN locations l  ON b.location_id  = l.id
        LEFT JOIN box_types bt ON b.box_type_id   = bt.id
@@ -159,7 +159,7 @@ app.get('/api/bins', async (req, res) => {
     const r = await pool.query(
       `SELECT b.*,
               l.cabinet_id, l.drawer_id,
-              bt.name AS box_type_name, bt.grid_width, bt.grid_length, bt.is_divided, bt.compartments
+              bt.name AS box_type_name, bt.is_divided, bt.compartments
        FROM bins b
        LEFT JOIN locations l  ON b.location_id  = l.id
        LEFT JOIN box_types bt ON b.box_type_id   = bt.id
@@ -174,7 +174,7 @@ app.get('/api/bins/:id', async (req, res) => {
     const r = await pool.query(
       `SELECT b.*,
               l.cabinet_id, l.drawer_id, l.grid_columns, l.grid_rows,
-              bt.name AS box_type_name, bt.grid_width, bt.grid_length,
+              bt.name AS box_type_name,
               bt.is_divided, bt.compartments, bt.description AS box_type_description
        FROM bins b
        LEFT JOIN locations l  ON b.location_id  = l.id

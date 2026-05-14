@@ -918,10 +918,16 @@ const App = {
     }
 
     const conflict = hasConflict();
+    const canRotate = g.bw !== g.bl;
     area.innerHTML = `
       <div class="text-xs text-gray-500 mb-2 flex items-center gap-3 flex-wrap">
         <span>Click to place the bin's top-left corner</span>
-        ${g.selX!=null ? `<span class="font-mono bg-slate-100 px-2 py-0.5 rounded">pos: (${g.selX}, ${g.selY}) · ${g.bw}×${g.bl} cells</span>` : ''}
+        ${g.selX!=null ? `<span class="font-mono bg-slate-100 px-2 py-0.5 rounded">pos: (${g.selX}, ${g.selY}) · ${g.bw}×${g.bl} cells</span>` : `<span class="font-mono bg-slate-100 px-2 py-0.5 rounded">${g.bw}×${g.bl} cells</span>`}
+        <button type="button" onclick="App._gridRotate()" ${canRotate?'':'disabled'}
+          class="ml-auto px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1"
+          title="${canRotate?'Rotate bin 90°':'Square footprint — rotation has no effect'}">
+          <span>↻</span> Rotate
+        </button>
         ${conflict ? `<span class="text-red-500 font-medium">⚠ Position conflict!</span>` : ''}
       </div>
       <div class="overflow-x-auto rounded-lg border-2 border-gray-300 inline-block max-w-full">
@@ -939,6 +945,18 @@ const App = {
     this._renderGridPicker();
   },
   _gridHover(c, r) { /* future: live preview */ },
+
+  _gridRotate() {
+    const g = S.grid;
+    if (g.bw === g.bl) return;
+    [g.bw, g.bl] = [g.bl, g.bw];
+    // Clamp selection so the rotated footprint still fits inside the drawer
+    if (g.locData && g.selX != null) {
+      g.selX = Math.min(g.selX, Math.max(0, g.locData.grid_columns - g.bw));
+      g.selY = Math.min(g.selY, Math.max(0, g.locData.grid_rows - g.bl));
+    }
+    this._renderGridPicker();
+  },
 
   async saveBin(id) {
     const g = S.grid;
