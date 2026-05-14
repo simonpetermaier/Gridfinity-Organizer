@@ -82,12 +82,13 @@ Object.assign(App, {
     const ct = S.contentTypes.find(c => c.id === id);
     const inUse = S.bins.filter(b => b.content_type === ct.name).length;
     const msg = inUse
-      ? `Delete "${ct.name}"?\n${inUse} bin(s) currently use this tag — they will keep their value but the tag won't appear in the dropdown any more.`
+      ? `Delete "${ct.name}"?\n${inUse} bin(s) currently use this tag — they will lose it (their content type becomes empty).`
       : `Delete "${ct.name}"?`;
     if (!confirm(msg)) return;
     try {
       await api.delete('/content-types/' + id);
-      await this.loadContentTypes();
+      // Reload bins too — affected rows just had content_type_id cleared by ON DELETE SET NULL.
+      await Promise.all([this.loadContentTypes(), this.loadBins()]);
       this.render();
       toast('Content type deleted');
     } catch (e) { alert('Error: ' + e.message); }

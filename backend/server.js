@@ -42,6 +42,65 @@ async function ensureSchema() {
       ON CONFLICT DO NOTHING
     `);
   }
+
+  // One-shot: promote bins.content_type (VARCHAR) → bins.content_type_id (FK).
+  // Guarded by the presence of the legacy column, so it never runs twice.
+  const cols = await pool.query(`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_name = 'bins' AND column_name IN ('content_type', 'content_type_id')
+  `);
+  const hasLegacy = cols.rows.some(c => c.column_name === 'content_type');
+  const hasFK     = cols.rows.some(c => c.column_name === 'content_type_id');
+  if (hasLegacy) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      if (!hasFK) {
+        await client.query(`
+          ALTER TABLE bins ADD COLUMN content_type_id INT
+            REFERENCES content_types(id) ON DELETE SET NULL
+        `);
+      }
+      // Seed catalog with every distinct legacy string, then point bins at the FK.
+      await client.query(`
+        INSERT INTO content_types (name)
+        SELECT DISTINCT content_type FROM bins
+        WHERE content_type IS NOT NULL AND content_type <> ''
+        ON CONFLICT DO NOTHING
+      `);
+      await client.query(`
+        UPDATE bins SET content_type_id = ct.id
+        FROM content_types ct WHERE bins.content_type = ct.name
+      `);
+      await client.query(`DROP INDEX IF EXISTS idx_bins_content`);
+      await client.query(`ALTER TABLE bins DROP COLUMN content_type`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_bins_content_type_id ON bins(content_type_id)`);
+      await client.query('COMMIT');
+      console.log('Migrated bins.content_type → bins.content_type_id');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+}
+
+// Resolve a free-form content_type string to a content_types.id.
+// Creates a new catalog row if the name isn't already present so the bin form's
+// datalist can keep accepting arbitrary text without a separate "Add" step.
+async function resolveContentTypeId(client, raw) {
+  const name = (raw || '').trim();
+  if (!name) return null;
+  const found = await client.query('SELECT id FROM content_types WHERE name=$1', [name]);
+  if (found.rows.length) return found.rows[0].id;
+  const inserted = await client.query(
+    `INSERT INTO content_types (name) VALUES ($1)
+       ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+       RETURNING id`,
+    [name]
+  );
+  return inserted.rows[0].id;
 }
 
 // ============================================================
@@ -98,9 +157,10 @@ app.delete('/api/locations/:id', async (req, res) => {
 app.get('/api/locations/:id/bins', async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT b.*, bt.name AS box_type_name
+      `SELECT b.*, bt.name AS box_type_name, ct.name AS content_type
        FROM bins b
-       LEFT JOIN box_types bt ON b.box_type_id = bt.id
+       LEFT JOIN box_types     bt ON b.box_type_id     = bt.id
+       LEFT JOIN content_types ct ON b.content_type_id = ct.id
        WHERE b.location_id = $1
        ORDER BY b.id`,
       [req.params.id]
@@ -159,13 +219,15 @@ app.get('/api/bins/search', async (req, res) => {
     const r = await pool.query(
       `SELECT b.*,
               l.cabinet_id, l.drawer_id,
-              bt.name AS box_type_name, bt.is_divided, bt.compartments
+              bt.name AS box_type_name, bt.is_divided, bt.compartments,
+              ct.name AS content_type
        FROM bins b
-       LEFT JOIN locations l  ON b.location_id  = l.id
-       LEFT JOIN box_types bt ON b.box_type_id   = bt.id
-       WHERE LOWER(b.content_type) LIKE $1
-          OR LOWER(b.attribute)    LIKE $1
-          OR LOWER(b.notes)        LIKE $1
+       LEFT JOIN locations     l  ON b.location_id     = l.id
+       LEFT JOIN box_types     bt ON b.box_type_id     = bt.id
+       LEFT JOIN content_types ct ON b.content_type_id = ct.id
+       WHERE LOWER(COALESCE(ct.name,'')) LIKE $1
+          OR LOWER(b.attribute)          LIKE $1
+          OR LOWER(b.notes)              LIKE $1
           OR LOWER(COALESCE(l.cabinet_id,'')) LIKE $1
           OR LOWER(COALESCE(l.drawer_id,''))  LIKE $1
        ORDER BY b.id`,
@@ -180,10 +242,12 @@ app.get('/api/bins', async (req, res) => {
     const r = await pool.query(
       `SELECT b.*,
               l.cabinet_id, l.drawer_id,
-              bt.name AS box_type_name, bt.is_divided, bt.compartments
+              bt.name AS box_type_name, bt.is_divided, bt.compartments,
+              ct.name AS content_type
        FROM bins b
-       LEFT JOIN locations l  ON b.location_id  = l.id
-       LEFT JOIN box_types bt ON b.box_type_id   = bt.id
+       LEFT JOIN locations     l  ON b.location_id     = l.id
+       LEFT JOIN box_types     bt ON b.box_type_id     = bt.id
+       LEFT JOIN content_types ct ON b.content_type_id = ct.id
        ORDER BY b.id`
     );
     ok(res, r.rows);
@@ -196,10 +260,12 @@ app.get('/api/bins/:id', async (req, res) => {
       `SELECT b.*,
               l.cabinet_id, l.drawer_id, l.grid_columns, l.grid_rows,
               bt.name AS box_type_name,
-              bt.is_divided, bt.compartments, bt.description AS box_type_description
+              bt.is_divided, bt.compartments, bt.description AS box_type_description,
+              ct.name AS content_type
        FROM bins b
-       LEFT JOIN locations l  ON b.location_id  = l.id
-       LEFT JOIN box_types bt ON b.box_type_id   = bt.id
+       LEFT JOIN locations     l  ON b.location_id     = l.id
+       LEFT JOIN box_types     bt ON b.box_type_id     = bt.id
+       LEFT JOIN content_types ct ON b.content_type_id = ct.id
        WHERE b.id = $1`,
       [req.params.id]
     );
@@ -210,37 +276,55 @@ app.get('/api/bins/:id', async (req, res) => {
 app.post('/api/bins', async (req, res) => {
   const { location_id, grid_x, grid_y, grid_width, grid_length, height_u,
           box_type_id, content_type, attribute, notes } = req.body;
+  const client = await pool.connect();
   try {
-    const r = await pool.query(
+    await client.query('BEGIN');
+    const content_type_id = await resolveContentTypeId(client, content_type);
+    const r = await client.query(
       `INSERT INTO bins
          (location_id, grid_x, grid_y, grid_width, grid_length, height_u,
-          box_type_id, content_type, attribute, notes)
+          box_type_id, content_type_id, attribute, notes)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [location_id || null, grid_x ?? null, grid_y ?? null,
        grid_width || 1, grid_length || 1, height_u || 3,
-       box_type_id || null, content_type, attribute, notes]
+       box_type_id || null, content_type_id, attribute, notes]
     );
+    await client.query('COMMIT');
     ok(res, r.rows[0]);
-  } catch (e) { err(res, e); }
+  } catch (e) {
+    await client.query('ROLLBACK');
+    err(res, e);
+  } finally {
+    client.release();
+  }
 });
 
 app.put('/api/bins/:id', async (req, res) => {
   const { location_id, grid_x, grid_y, grid_width, grid_length, height_u,
           box_type_id, content_type, attribute, notes } = req.body;
+  const client = await pool.connect();
   try {
-    const r = await pool.query(
+    await client.query('BEGIN');
+    const content_type_id = await resolveContentTypeId(client, content_type);
+    const r = await client.query(
       `UPDATE bins SET
          location_id=$1, grid_x=$2, grid_y=$3, grid_width=$4, grid_length=$5,
-         height_u=$6, box_type_id=$7, content_type=$8, attribute=$9, notes=$10,
+         height_u=$6, box_type_id=$7, content_type_id=$8, attribute=$9, notes=$10,
          updated_at=NOW()
        WHERE id=$11 RETURNING *`,
       [location_id || null, grid_x ?? null, grid_y ?? null,
        grid_width || 1, grid_length || 1, height_u || 3,
-       box_type_id || null, content_type, attribute, notes,
+       box_type_id || null, content_type_id, attribute, notes,
        req.params.id]
     );
+    await client.query('COMMIT');
     r.rows.length ? ok(res, r.rows[0]) : notFound(res);
-  } catch (e) { err(res, e); }
+  } catch (e) {
+    await client.query('ROLLBACK');
+    err(res, e);
+  } finally {
+    client.release();
+  }
 });
 
 app.delete('/api/bins/:id', async (req, res) => {
@@ -271,29 +355,16 @@ app.post('/api/content-types', async (req, res) => {
   } catch (e) { err(res, e); }
 });
 
-// Rename cascades to bins.content_type so existing bins keep their tag.
+// Renames are atomic now that bins.content_type_id references content_types(id).
 app.put('/api/content-types/:id', async (req, res) => {
   const name = (req.body.name || '').trim();
   if (!name) return res.status(400).json({ error: 'name required' });
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-    const old = await client.query('SELECT name FROM content_types WHERE id=$1', [req.params.id]);
-    if (!old.rows.length) { await client.query('ROLLBACK'); return notFound(res); }
-    await client.query(
-      'UPDATE bins SET content_type=$1 WHERE content_type=$2', [name, old.rows[0].name]
-    );
-    const r = await client.query(
+    const r = await pool.query(
       'UPDATE content_types SET name=$1 WHERE id=$2 RETURNING *', [name, req.params.id]
     );
-    await client.query('COMMIT');
-    ok(res, r.rows[0]);
-  } catch (e) {
-    await client.query('ROLLBACK');
-    err(res, e);
-  } finally {
-    client.release();
-  }
+    r.rows.length ? ok(res, r.rows[0]) : notFound(res);
+  } catch (e) { err(res, e); }
 });
 
 app.delete('/api/content-types/:id', async (req, res) => {

@@ -95,7 +95,7 @@ bins (
   grid_length     INT,            -- cells occupied in Y (may be rotated)
   height_u        INT,            -- actual height (may override box_type default)
   box_type_id     INT → box_types,
-  content_type    VARCHAR(100),   -- free-text tag; catalog in `content_types`
+  content_type_id INT → content_types ON DELETE SET NULL,
   attribute       VARCHAR(255),   -- "M5×30", "JST 2.54 mm", etc.
   notes           TEXT,
   created_at      TIMESTAMP,
@@ -147,8 +147,8 @@ DELETE /api/box-types/:id               delete
 
 GET    /api/content-types               all tag entries (sorted by name)
 POST   /api/content-types               create  { name }
-PUT    /api/content-types/:id           rename — TRANSACTIONALLY cascades to bins.content_type
-DELETE /api/content-types/:id           delete (non-destructive — bins keep their string)
+PUT    /api/content-types/:id           rename (atomic — bins join by id, no cascade needed)
+DELETE /api/content-types/:id           delete (FK ON DELETE SET NULL — referencing bins lose the tag)
 
 GET    /api/bins                        all bins (joined with locations + box_types)
 GET    /api/bins/search?q=<term>        full-text search (IMPORTANT: registered BEFORE /:id)
@@ -309,7 +309,6 @@ in the current environment, say so explicitly rather than declaring success.
 - **No quantity tracking** — bins store *what* but not *how many*. Adding a `quantity INT` and `min_quantity INT` (for low-stock alerts) to `bins` is a common request.
 - **Migrations are ad-hoc** — `ensureSchema()` in [server.js](../backend/server.js) is the only mechanism. It's idempotent (`CREATE TABLE IF NOT EXISTS`, seed only when empty) and runs on every boot. Fine for additive changes; for column-level changes (renames, type changes, drops) you'd want either explicit guarded `ALTER TABLE` steps in `ensureSchema()` or a proper runner (e.g. `node-pg-migrate`).
 - **`grid_width`/`grid_length` on `bins` can drift** from `box_types` if a box type is edited after bins are placed. Consider a trigger or application-level sync if this becomes an issue. (Note: rotation deliberately differs from the box-type defaults — see the schema note above.)
-- **`bins.content_type` is a string, not an FK** to `content_types.id`. Adding a tag in the catalog does not register the string anywhere on existing bins, and deleting a tag leaves the strings stranded (but still searchable). Renames are kept consistent transactionally by `PUT /api/content-types/:id`. Promoting this to an FK is a clean future cleanup.
 
 ---
 
@@ -320,6 +319,6 @@ in the current environment, say so explicitly rather than declaring success.
 - **Frontend HTML:** always escape user data with `esc()` before inserting into template literals.
 - **No build step:** keep the frontend as plain `<script>` files under `backend/public/`. When adding a view, drop a new file under `public/js/views/`, extend the `App` global via `Object.assign(App, { … })`, and add the `<script>` tag in [index.html](../backend/public/index.html) (order matters — after `core.js` and `app.js`).
 - **Joins on `bins` + `box_types`:** never `SELECT b.*, bt.grid_width, bt.grid_length …` — the same-named box-type columns shadow the bin's stored (possibly rotated) dims in the response. Either omit or alias them.
-- **Catalog renames:** if you add another lookup catalog like `content_types`, mirror the transactional cascade pattern in [server.js](../backend/server.js) so the catalog and existing rows stay in sync.
+- **Catalog references:** the `content_types` ↔ `bins` model uses a proper FK (`bins.content_type_id REFERENCES content_types(id) ON DELETE SET NULL`). When adding a new lookup catalog, follow the same shape rather than storing free-text strings on the referencing rows. `POST /api/bins` accepts a `content_type` *string* and the server resolves it to an id (creating the catalog row on the fly if missing) — see `resolveContentTypeId()` in [server.js](../backend/server.js). GET responses still expose `content_type` as a joined string for frontend compat.
 - **No ORM:** keep queries in `server.js` as plain SQL. The codebase is small enough that an ORM adds more friction than value.
 - **Tailwind:** loaded from CDN. Use only standard utility classes — no arbitrary values like `w-[43px]` as the CDN build won't include them. Bespoke styles belong in [styles/main.css](../backend/public/styles/main.css), driven by CSS variables for theme-readiness.

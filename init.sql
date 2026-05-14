@@ -27,6 +27,13 @@ CREATE TABLE IF NOT EXISTS box_types (
     description     TEXT
 );
 
+-- User-editable catalog of content-type tags shown in the bin form datalist
+-- (declared before `bins` because `bins.content_type_id` references it)
+CREATE TABLE IF NOT EXISTS content_types (
+    id              SERIAL PRIMARY KEY,
+    name            VARCHAR(100) NOT NULL UNIQUE
+);
+
 -- Actual inventory bins placed in drawers
 CREATE TABLE IF NOT EXISTS bins (
     id              SERIAL PRIMARY KEY,
@@ -36,22 +43,16 @@ CREATE TABLE IF NOT EXISTS bins (
     grid_width      INT NOT NULL DEFAULT 1,   -- cells occupied in X
     grid_length     INT NOT NULL DEFAULT 1,   -- cells occupied in Y
     height_u        INT NOT NULL DEFAULT 3,
-    box_type_id     INT REFERENCES box_types(id) ON DELETE SET NULL,
-    content_type    VARCHAR(100),             -- bolt, nut, connector, tool, ...
+    box_type_id     INT REFERENCES box_types(id)     ON DELETE SET NULL,
+    content_type_id INT REFERENCES content_types(id) ON DELETE SET NULL,
     attribute       VARCHAR(255),             -- M5×30, JST 2.54 mm, ...
     notes           TEXT,
     created_at      TIMESTAMP DEFAULT NOW(),
     updated_at      TIMESTAMP DEFAULT NOW()
 );
 
--- User-editable catalog of content-type tags shown in the bin form datalist
-CREATE TABLE IF NOT EXISTS content_types (
-    id              SERIAL PRIMARY KEY,
-    name            VARCHAR(100) NOT NULL UNIQUE
-);
-
-CREATE INDEX IF NOT EXISTS idx_bins_location ON bins(location_id);
-CREATE INDEX IF NOT EXISTS idx_bins_content  ON bins(content_type);
+CREATE INDEX IF NOT EXISTS idx_bins_location         ON bins(location_id);
+CREATE INDEX IF NOT EXISTS idx_bins_content_type_id  ON bins(content_type_id);
 
 -- ============================================================
 -- Seed data
