@@ -11,14 +11,15 @@ const App = {
     const m = window.location.pathname.match(/^\/bin\/(\d+)$/);
     if (m) { await this.renderBinScan(m[1]); return; }
 
-    await Promise.all([this.loadLocations(), this.loadBoxTypes(), this.loadBins()]);
+    await Promise.all([this.loadLocations(), this.loadBoxTypes(), this.loadContentTypes(), this.loadBins()]);
     this.render();
   },
 
   // ── data loaders ───────────────────────────────────────────
-  async loadLocations() { S.locations = await api.get('/locations'); },
-  async loadBoxTypes()  { S.boxTypes  = await api.get('/box-types'); },
-  async loadBins()      { S.bins      = await api.get('/bins'); },
+  async loadLocations()    { S.locations    = await api.get('/locations'); },
+  async loadBoxTypes()     { S.boxTypes     = await api.get('/box-types'); },
+  async loadContentTypes() { S.contentTypes = await api.get('/content-types'); },
+  async loadBins()         { S.bins         = await api.get('/bins'); },
 
   // ── main render ────────────────────────────────────────────
   render() {
@@ -33,10 +34,11 @@ const App = {
 
   renderHeader() {
     const tabs = [
-      { id: 'inventory', icon: '📦', label: 'Inventory' },
-      { id: 'locations', icon: '🗄️', label: 'Drawers'   },
-      { id: 'box-types', icon: '📐', label: 'Box Types' },
-      { id: 'search',    icon: '🔍', label: 'Search'    },
+      { id: 'inventory',     icon: '📦', label: 'Inventory'     },
+      { id: 'locations',     icon: '🗄️', label: 'Drawers'       },
+      { id: 'box-types',     icon: '📐', label: 'Box Types'     },
+      { id: 'content-types', icon: '🏷️', label: 'Content Types' },
+      { id: 'search',        icon: '🔍', label: 'Search'        },
     ];
     return `
       <header class="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-30">
@@ -60,10 +62,11 @@ const App = {
 
   renderTab() {
     switch (S.tab) {
-      case 'inventory': return this.renderInventory();
-      case 'locations': return this.renderLocations();
-      case 'box-types': return this.renderBoxTypes();
-      case 'search':    return this.renderSearch();
+      case 'inventory':     return this.renderInventory();
+      case 'locations':     return this.renderLocations();
+      case 'box-types':     return this.renderBoxTypes();
+      case 'content-types': return this.renderContentTypes();
+      case 'search':        return this.renderSearch();
     }
   },
 

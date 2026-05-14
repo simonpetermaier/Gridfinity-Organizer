@@ -23,6 +23,27 @@ function ok(res, data)  { res.json(data); }
 function err(res, e)    { console.error(e); res.status(500).json({ error: e.message }); }
 function notFound(res)  { res.status(404).json({ error: 'Not found' }); }
 
+// Idempotent schema upgrade for existing DBs (init.sql only runs on a fresh
+// volume). Creates new tables if missing and seeds them only when empty —
+// user deletions are preserved across restarts.
+async function ensureSchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS content_types (
+      id   SERIAL PRIMARY KEY,
+      name VARCHAR(100) NOT NULL UNIQUE
+    )
+  `);
+  const { rows } = await pool.query('SELECT COUNT(*)::int AS n FROM content_types');
+  if (rows[0].n === 0) {
+    await pool.query(`
+      INSERT INTO content_types (name) VALUES
+        ('Bolt'),('Nut'),('Washer'),('Screw'),('Connector'),
+        ('Cable'),('Tool'),('Electronics'),('Spring'),('Bearing'),('Insert')
+      ON CONFLICT DO NOTHING
+    `);
+  }
+}
+
 // ============================================================
 // LOCATIONS
 // ============================================================
@@ -229,10 +250,65 @@ app.delete('/api/bins/:id', async (req, res) => {
   } catch (e) { err(res, e); }
 });
 
+// ============================================================
+// CONTENT TYPES  (user-editable catalog for the bin-form datalist)
+// ============================================================
+app.get('/api/content-types', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM content_types ORDER BY name');
+    ok(res, r.rows);
+  } catch (e) { err(res, e); }
+});
+
+app.post('/api/content-types', async (req, res) => {
+  const name = (req.body.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'name required' });
+  try {
+    const r = await pool.query(
+      'INSERT INTO content_types (name) VALUES ($1) RETURNING *', [name]
+    );
+    ok(res, r.rows[0]);
+  } catch (e) { err(res, e); }
+});
+
+// Rename cascades to bins.content_type so existing bins keep their tag.
+app.put('/api/content-types/:id', async (req, res) => {
+  const name = (req.body.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'name required' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const old = await client.query('SELECT name FROM content_types WHERE id=$1', [req.params.id]);
+    if (!old.rows.length) { await client.query('ROLLBACK'); return notFound(res); }
+    await client.query(
+      'UPDATE bins SET content_type=$1 WHERE content_type=$2', [name, old.rows[0].name]
+    );
+    const r = await client.query(
+      'UPDATE content_types SET name=$1 WHERE id=$2 RETURNING *', [name, req.params.id]
+    );
+    await client.query('COMMIT');
+    ok(res, r.rows[0]);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    err(res, e);
+  } finally {
+    client.release();
+  }
+});
+
+app.delete('/api/content-types/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM content_types WHERE id=$1', [req.params.id]);
+    ok(res, { success: true });
+  } catch (e) { err(res, e); }
+});
+
 // ── SPA catch-all ─────────────────────────────────────────────
 app.get('*', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 const PORT = parseInt(process.env.PORT || '3000');
-app.listen(PORT, () => console.log(`Gridfinity Organizer → http://localhost:${PORT}`));
+ensureSchema()
+  .then(() => app.listen(PORT, () => console.log(`Gridfinity Organizer → http://localhost:${PORT}`)))
+  .catch(e => { console.error('Schema init failed:', e); process.exit(1); });

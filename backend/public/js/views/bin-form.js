@@ -12,7 +12,7 @@ Object.assign(App, {
               placeholder="bolt, connector, tool…"
               class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
             <datalist id="ctype-dl">
-              ${['Bolt','Nut','Washer','Screw','Connector','Cable','Tool','Electronics','Spring','Bearing','Insert'].map(v => `<option value="${v}">`).join('')}
+              ${S.contentTypes.map(ct => `<option value="${esc(ct.name)}">`).join('')}
             </datalist>
           </div>
           <div>

@@ -44,6 +44,12 @@ CREATE TABLE IF NOT EXISTS bins (
     updated_at      TIMESTAMP DEFAULT NOW()
 );
 
+-- User-editable catalog of content-type tags shown in the bin form datalist
+CREATE TABLE IF NOT EXISTS content_types (
+    id              SERIAL PRIMARY KEY,
+    name            VARCHAR(100) NOT NULL UNIQUE
+);
+
 CREATE INDEX IF NOT EXISTS idx_bins_location ON bins(location_id);
 CREATE INDEX IF NOT EXISTS idx_bins_content  ON bins(content_type);
 
@@ -70,4 +76,10 @@ VALUES
     ('1×2 Div×3',  1, 2, 3, TRUE,  2, 'Divided 2-compartment bin'),
     ('1×4 Div×3',  1, 4, 3, TRUE,  4, 'Divided 4-compartment bin'),
     ('Toolcrest 3×5', 3, 5, 6, FALSE, 1, 'Deep tool holder')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO content_types (name)
+VALUES
+    ('Bolt'),('Nut'),('Washer'),('Screw'),('Connector'),
+    ('Cable'),('Tool'),('Electronics'),('Spring'),('Bearing'),('Insert')
 ON CONFLICT DO NOTHING;

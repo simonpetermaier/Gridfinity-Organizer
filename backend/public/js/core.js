@@ -40,9 +40,10 @@ const api = {
 // STATE
 // ═══════════════════════════════════════════════════════════════
 const S = {
-  tab:           'inventory',   // inventory | locations | box-types | search
+  tab:           'inventory',   // inventory | locations | box-types | content-types | search
   locations:     [],
   boxTypes:      [],
+  contentTypes:  [],
   bins:          [],
   locFilter:     '',
   typeFilter:    '',
