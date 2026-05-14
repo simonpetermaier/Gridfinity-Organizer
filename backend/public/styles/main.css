@@ -1,0 +1,94 @@
+/* ═══════════════════════════════════════════════════════════════
+   Theme tokens — override in [data-theme="dark"] (or another
+   selector) to introduce additional themes. Tailwind utility
+   classes in the markup are theme-agnostic; this file only
+   covers the bespoke styles that Tailwind cannot express.
+═══════════════════════════════════════════════════════════════ */
+:root {
+  --gc-border:     #d1d5db;
+  --gc-empty-bg:   #ffffff;
+  --gc-hover-bg:   #f0f9ff;
+  --gc-occ-bg:     #3b82f6;
+  --gc-occ-border: #2563eb;
+  --gc-sel-bg:     #10b981;
+  --gc-sel-border: #059669;
+  --gc-conflict-bg:     #ef4444;
+  --gc-conflict-border: #dc2626;
+  --gc-preview-bg:     #a7f3d0;
+  --gc-preview-border: #10b981;
+  --gc-hover-ok-bg:     #bbf7d0;
+  --gc-hover-ok-border: #22c55e;
+  --bin-lbl-color: #ffffff;
+
+  --tab-active-border: #3b82f6;
+  --tab-active-color:  #2563eb;
+
+  --scrollbar-track: #f1f5f9;
+  --scrollbar-thumb: #cbd5e1;
+  --scrollbar-thumb-hover: #94a3b8;
+}
+
+/* Dark theme — wire up later by setting
+   <html data-theme="dark"> and adjusting Tailwind for `dark:` variants.
+[data-theme="dark"] {
+  --gc-border:     #374151;
+  --gc-empty-bg:   #111827;
+  --gc-hover-bg:   #1f2937;
+  ...
+}
+*/
+
+/* ── Grid visualisation ──────────────────────────── */
+.gc {
+  width: 46px;
+  height: 46px;
+  border: 1px solid var(--gc-border);
+  cursor: pointer;
+  position: relative;
+  box-sizing: border-box;
+  transition: background .1s;
+}
+.gc:hover    { background: var(--gc-hover-bg); }
+.gc.empty    { background: var(--gc-empty-bg); }
+.gc.occ      { background: var(--gc-occ-bg);      border-color: var(--gc-occ-border); }
+.gc.sel      { background: var(--gc-sel-bg);      border-color: var(--gc-sel-border); }
+.gc.conflict { background: var(--gc-conflict-bg); border-color: var(--gc-conflict-border); }
+.gc.preview  { background: var(--gc-preview-bg);  border-color: var(--gc-preview-border); }
+.gc.hover-ok { background: var(--gc-hover-ok-bg); border-color: var(--gc-hover-ok-border); }
+
+.bin-lbl {
+  font-size: 7px;
+  line-height: 1.2;
+  position: absolute;
+  inset: 2px;
+  overflow: hidden;
+  color: var(--bin-lbl-color);
+  pointer-events: none;
+  font-weight: 600;
+}
+
+/* ── Tab underline ───────────────────────────────── */
+.tab-btn          { border-bottom: 2px solid transparent; }
+.tab-btn.active   { border-bottom-color: var(--tab-active-border);
+                    color: var(--tab-active-color);
+                    font-weight: 600; }
+
+/* ── Scrollbar thin ──────────────────────────────── */
+::-webkit-scrollbar               { width: 6px; height: 6px; }
+::-webkit-scrollbar-track         { background: var(--scrollbar-track); }
+::-webkit-scrollbar-thumb         { background: var(--scrollbar-thumb); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover   { background: var(--scrollbar-thumb-hover); }
+
+/* ── Animations ──────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+.fade-in { animation: fadeIn .15s ease; }
+
+/* ── Print QR ────────────────────────────────────── */
+@media print {
+  body > *:not(#print-area) { display: none !important; }
+  #print-area               { display: block !important; }
+}
+#print-area { display: none; }
