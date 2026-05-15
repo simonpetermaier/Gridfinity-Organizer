@@ -730,3 +730,159 @@ table.gf-table tbody tr:hover { background: var(--soft); }
   #print-area { display: block !important; }
 }
 #print-area { display: none; }
+
+/* ═══════════════════════════════════════════════════════════════
+   Mobile layout (≤ 768px). Everything below here only kicks in on
+   small viewports — desktop styles above are unaffected.
+═══════════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  /* Kill any lateral scroll that survives the layout changes. */
+  body { overflow-x: hidden; }
+
+  /* Shell: drop the sidebar column so main is full-width. */
+  .shell { grid-template-columns: 1fr; }
+
+  /* Sidebar → fixed bottom bar (horizontal 5-item nav). Brand,
+     workspace stats, and the theme toggle move out of the way; the
+     theme toggle re-appears in the topbar (see below). */
+  .sidebar {
+    position: fixed;
+    top: auto; bottom: 0; left: 0; right: 0;
+    height: 60px;
+    flex-direction: row;
+    padding: 0;
+    border-right: none;
+    border-top: 1px solid var(--line-soft);
+    overflow: visible;
+    z-index: 30;
+    box-shadow: 0 -2px 8px rgba(0,0,0,0.04);
+  }
+  .sidebar-brand,
+  .sidebar-spacer,
+  .sidebar-stats,
+  .sidebar > .theme-toggle { display: none; }
+  .sidebar nav { display: flex; flex: 1; height: 100%; }
+  .nav-item {
+    flex: 1;
+    flex-direction: column;
+    height: 100%;
+    padding: 6px 2px;
+    border-radius: 0;
+    gap: 2px;
+    font-size: 11px;
+    margin: 0;
+    position: relative;
+    line-height: 1;
+  }
+  .nav-item .nav-ico .icon { width: 20px; height: 20px; }
+  .nav-item > span:last-child {
+    /* Truncate label rather than wrap if it ever overflows the cell. */
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .nav-item.active {
+    background: transparent;
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .nav-item.active::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 18%; right: 18%;
+    height: 2px;
+    background: var(--accent);
+    border-radius: 0 0 2px 2px;
+  }
+
+  /* Topbar: hide breadcrumbs, give the search pill all remaining
+     room, hide the kbd hint inside it, expose a quick theme toggle
+     on the right since the sidebar's is gone. */
+  .topbar {
+    padding: 0 12px;
+    gap: 8px;
+  }
+  .crumbs { display: none; }
+  .qf-pill {
+    min-width: 0;
+    flex: 1;
+  }
+  .qf-pill .qf-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .qf-pill .kbd { display: none; }
+
+  /* Primary action button (top-right): show icon only, hide label. */
+  .topbar .btn-primary .btn-label { display: none; }
+  .topbar .btn-primary {
+    padding: 0 10px;
+    height: 32px;
+    flex-shrink: 0;
+  }
+
+  /* Page: leave room for the fixed bottom nav. */
+  .page { padding: 16px 12px 80px; }
+  .page-header { gap: 8px; }
+  .page-title { font-size: 18px; }
+  .filters { gap: 6px; }
+
+  /* Inventory list compacts to ID + content + location (drop Box
+     and the trailing spacer column). */
+  .inv-list .inv-head,
+  .inv-list .inv-row {
+    grid-template-columns: 40px 1fr 80px;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .inv-list .inv-head > div:nth-child(3),
+  .inv-list .inv-row > div:nth-child(3),
+  .inv-list .inv-head > div:nth-child(5),
+  .inv-list .inv-row > div:nth-child(5) {
+    display: none;
+  }
+  .inv-detail .meta-grid { grid-template-columns: 1fr; }
+  .inv-detail .contents { font-size: 22px; word-break: break-word; }
+
+  /* Drawers cabinet grid: 1 col. MiniGrid SVG scales fluidly via
+     the viewBox we set, capped at 160px so the meta column survives. */
+  .cabinet-grid { grid-template-columns: 1fr; gap: 12px; }
+  .drawer-row { flex-wrap: wrap; }
+  .drawer-row .minigrid-wrap {
+    max-width: 100%;
+    width: 100%;
+  }
+  .drawer-row .minigrid-wrap svg {
+    width: 100%;
+    height: auto;
+    max-width: 220px;
+  }
+
+  /* Box types gallery: 2 per row. */
+  .box-gallery { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+
+  /* Content type cards: 1 per row. */
+  .tag-grid { grid-template-columns: 1fr; }
+
+  /* Search palette spans the whole page. */
+  .palette { max-width: 100%; }
+
+  /* Modal: edge-to-edge with a little breathing room. */
+  .modal-overlay { padding: 12px; }
+  .modal { max-width: 100%; max-height: 88vh; }
+
+  /* Collapse the inline 2- and 3-column form grids inside modals to
+     single column. Inline styles need !important to override. */
+  .modal-body [style*="grid-template-columns:1fr 1fr"],
+  .modal-body [style*="grid-template-columns:repeat(2"],
+  .modal-body [style*="grid-template-columns:repeat(3"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* The bin form's grid picker can be wider than the modal on large
+     drawers; the inner wrapper already has overflow:auto, but the
+     container shouldn't widen the modal itself. */
+  #grid-area > div:nth-child(2) { max-width: 100%; }
+}

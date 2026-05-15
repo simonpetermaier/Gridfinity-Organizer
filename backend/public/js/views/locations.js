@@ -83,7 +83,7 @@ Object.assign(App, {
         fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.2" rx="2"
         ><title>#${b.id} ${esc(b.attribute || b.content_type || '')}</title></rect>`;
     }
-    return `<svg width="${cols*cell}" height="${rows*cell}" role="img" aria-label="Drawer ${esc(loc.drawer_id)} layout">
+    return `<svg width="${cols*cell}" height="${rows*cell}" viewBox="0 0 ${cols*cell} ${rows*cell}" role="img" aria-label="Drawer ${esc(loc.drawer_id)} layout">
       ${cells}${binRects}
     </svg>`;
   },

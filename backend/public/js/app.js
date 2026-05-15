@@ -109,11 +109,13 @@ const App = {
 
   renderTopAction() {
     const plus = icon('plus', 14);
+    const btn = (label, handler, ariaLabel) =>
+      `<button class="btn btn-primary" onclick="${handler}" aria-label="${ariaLabel}">${plus}<span class="btn-label">${label}</span></button>`;
     switch (S.tab) {
-      case 'inventory':     return `<button class="btn btn-primary" onclick="App.showAddBin()">${plus} Bin</button>`;
-      case 'locations':     return `<button class="btn btn-primary" onclick="App.showAddLocation()">${plus} Drawer</button>`;
-      case 'box-types':     return `<button class="btn btn-primary" onclick="App.showAddBoxType()">${plus} Box Type</button>`;
-      case 'content-types': return `<button class="btn btn-primary" onclick="App.showAddContentType()">${plus} Type</button>`;
+      case 'inventory':     return btn('Bin',      'App.showAddBin()',         'Add bin');
+      case 'locations':     return btn('Drawer',   'App.showAddLocation()',    'Add drawer');
+      case 'box-types':     return btn('Box Type', 'App.showAddBoxType()',     'Add box type');
+      case 'content-types': return btn('Type',     'App.showAddContentType()', 'Add content type');
       default:              return '';
     }
   },
