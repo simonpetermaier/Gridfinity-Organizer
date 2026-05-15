@@ -105,6 +105,88 @@ Use the **☀️/🌙** toggle in the sidebar (or its mobile counterpart). The c
 
 ---
 
+## Host-portable QR codes
+
+Printed stickers can outlive your host setup. The backend supports two QR payload formats; the in-app scanner reads either.
+
+| `QR_PAYLOAD_MODE` | Payload encoded | Native iOS Camera app | Scanner-only |
+|---|---|---|---|
+| `url` *(default)* | `https://host/bin/42` | ✅ | — |
+| `id` | `gfbin:42` | ❌ | ✅ |
+
+If you're going to print stickers once and never reprint, switch to `id` mode. The codes won't know your host name and stay valid through every server move.
+
+**Flip it from the UI** (recommended): open the **Scan** tab and toggle between `URL` and `gfbin:N` in the page header. The choice is persisted in Postgres (table `app_settings`) and takes effect on the next QR you render — no restart.
+
+The `QR_PAYLOAD_MODE` env var only **seeds the initial value** on a fresh database. After that the UI toggle wins; changing the env var doesn't override what's in the DB. For unattended provisioning you can pre-seed the value:
+
+```yaml
+# docker-compose.yml — only used on a fresh DB
+backend:
+  environment:
+    QR_PAYLOAD_MODE: id
+```
+
+Scan codes from any mode with the **Scan** tab in the sidebar. The scanner accepts both `gfbin:N` and full `…/bin/N` URLs, so old stickers keep working when you switch.
+
+---
+
+## Camera & HTTPS
+
+The in-app scanner uses the browser's `getUserMedia` API. **Modern browsers — iOS Safari especially — only allow camera access on a secure origin (HTTPS, or `localhost`).** Plain HTTP on a LAN IP will never trigger the camera prompt. This is a security boundary, not a misconfiguration you can flag-away.
+
+Two pragmatic paths to add HTTPS:
+
+### A. Caddy reverse proxy on the LAN (recommended)
+
+A small `caddy` service block is included in `docker-compose.yml` — commented out by default. To enable:
+
+1. Uncomment the `caddy:` service and the two `caddy_*` lines in the `volumes:` section.
+2. `docker compose up -d`. Caddy starts on `:443` using its built-in CA (`tls internal`).
+3. Visit `https://<host-ip>/` on your phone and accept the cert warning **once**. The scanner now works.
+
+Want no warnings? Either:
+
+- **mkcert** (LAN-trusted certs):
+  ```bash
+  brew install mkcert nss              # macOS — Linux is `apt`/`dnf`
+  mkcert -install                      # adds the mkcert root CA to your trust store
+  cd caddy
+  mkcert -cert-file certs/cert.pem -key-file certs/key.pem \
+         gridfinity.local 192.168.1.50  # adjust to your host's name/IP
+  # Edit caddy/Caddyfile: replace `tls internal` with
+  #   tls /certs/cert.pem /certs/key.pem
+  docker compose restart caddy
+  ```
+  Install the mkcert root CA on every phone you scan from (one-time; instructions in the [mkcert README](https://github.com/FiloSottile/mkcert#installation)).
+
+- **Caddy's root CA** (no extra tooling):
+  ```bash
+  docker compose exec caddy caddy trust-pem
+  # → prints PEM. Save as `caddy-root.crt`, email it to yourself,
+  #   open on iPhone, Settings → General → Profile → install.
+  ```
+
+### B. Tailscale Magic DNS + HTTPS (cleanest if you already use Tailscale)
+
+Tailscale gives every machine on your tailnet a real Let's Encrypt cert:
+
+1. Install Tailscale on the Docker host, enable HTTPS in the admin console.
+2. Run `tailscale cert <hostname>.<tailnet>.ts.net` on the host — drops `cert.pem` + `key.pem` in the working directory.
+3. Copy them into `./caddy/certs/`, edit the Caddyfile to use them (as in mkcert step), restart Caddy.
+4. Scan QRs from any phone on your tailnet via the `https://hostname.tailnet.ts.net` URL — no cert warnings, no root CA install.
+
+### Trade-offs at a glance
+
+| Approach | Setup time | Cert warnings | Where it works |
+|---|---|---|---|
+| Plain HTTP | 0 min | — | Anywhere, but **no scanner** |
+| Caddy + `tls internal` | 2 min | First-visit warning per device | Anywhere on the LAN |
+| Caddy + mkcert | 10 min | None (after root install) | Anywhere on the LAN |
+| Caddy + Tailscale cert | 15 min | None | Anywhere on the tailnet |
+
+---
+
 ## Backup & restore
 
 Backups are **already running** the moment you start the stack — no configuration needed. You'll see them appear in `./backups/`:

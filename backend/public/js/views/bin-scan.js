@@ -47,7 +47,7 @@ Object.assign(App, {
           </div>
         </div>`;
       new QRCode($('scan-qr'), {
-        text: window.location.href,
+        text: qrPayload(b.id),
         width: 120, height: 120,
         colorDark: '#000', colorLight: '#ffffff',
         correctLevel: QRCode.CorrectLevel.M,

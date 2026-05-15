@@ -41,7 +41,8 @@ const api = {
 // STATE
 // ═══════════════════════════════════════════════════════════════
 const S = {
-  tab:           'inventory',   // inventory | locations | box-types | content-types | search
+  tab:           'inventory',   // inventory | locations | box-types | content-types | search | scanner
+  qrPayloadMode: 'url',         // 'url' = host-coupled URL · 'id' = host-portable gfbin:N
   theme:         'light',       // light | dark — kept in sync with <html data-theme>
   selectedBinId: null,          // for the inventory split view
   locations:     [],
@@ -119,4 +120,36 @@ async function injectIconSprite() {
 // containing element (e.g. a button class).
 function icon(name, size = 16) {
   return `<svg class="icon" width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-${name}"/></svg>`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// QR PAYLOAD — what string we encode in printed labels.
+//   'url'  → "https://host/bin/42"  (works in iOS Camera app,
+//            but the host name lives forever on the sticker)
+//   'id'   → "gfbin:42"             (host-portable; only the
+//            in-app scanner can decode this — see views/scanner.js)
+// The mode is set server-side via the QR_PAYLOAD_MODE env var and
+// fetched once at boot into S.qrPayloadMode.
+// ═══════════════════════════════════════════════════════════════
+function qrPayload(id) {
+  return S.qrPayloadMode === 'id'
+    ? `gfbin:${id}`
+    : `${window.location.origin}/bin/${id}`;
+}
+
+// Inverse of qrPayload(): given anything a scanner found, extract a
+// bin id we can navigate to on the current origin. Returns null if
+// the payload doesn't look like one of ours.
+function parseScannedPayload(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  // Host-portable form
+  let m = s.match(/^gfbin:(\d+)$/i);
+  if (m) return parseInt(m[1], 10);
+  // Fully-qualified URL form, any host
+  m = s.match(/\/bin\/(\d+)\/?$/);
+  if (m) return parseInt(m[1], 10);
+  // Bare numeric (someone tested by encoding just the ID)
+  if (/^\d+$/.test(s)) return parseInt(s, 10);
+  return null;
 }
