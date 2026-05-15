@@ -1,68 +1,326 @@
-# 🗄️ Gridfinity Organizer
+# Gridfinity Organizer
 
-Workshop inventory management with PostgreSQL backend, REST API, and a full-featured web UI.
+A self-hosted web app for cataloguing the contents of your [Gridfinity](https://gridfinity.xyz/) bins. Organise your workshop as **cabinets → drawers → grid positions**, give every bin a printed QR code, and find anything in seconds — from a laptop or right at the bench on your phone.
 
-## Features
+> Built around a small Postgres + Node.js stack. No build pipeline, no framework, no account system. Spin it up with one `docker compose` command and start tagging bins.
 
-- **Inventory table** — all bins with filtering, QR code generation, edit/delete
-- **Drawer grid map** — visual top-down view per drawer, click bins to pull up QR
-- **Interactive grid picker** — click to place bins with live conflict detection
-- **Box type catalog** — manage bin form factors (size, divided, compartments)
-- **Full-text search** — by type, attribute, location, or notes
-- **QR scan page** — scan a printed QR code to open the bin's detail page directly on mobile
+---
 
-## Database schema
+## Highlights
 
-| Table        | Purpose                                      |
-|-------------|----------------------------------------------|
-| `locations`  | Cabinets → Drawers with grid dimensions       |
-| `box_types`  | Catalog of Gridfinity bin form factors        |
-| `bins`       | Placed inventory items (the main table)       |
+- 📦 **Inventory split view** — list every bin, click for a detail card with its QR, location, and box type.
+- 🗄️ **Visual drawers** — each cabinet shows mini-maps of its drawers with bins drawn in their actual positions.
+- 📐 **Box-type gallery** — vector previews of every Gridfinity footprint you have, divided bins included.
+- 🏷️ **Editable content tags** — rename "Bolt" → "Bolts" and every bin that uses it updates in one transaction.
+- 🎨 **Multi-color taxonomy** — each tag picks one of four palette colors so the drawer map turns into a glanceable heat-map.
+- 🔍 **Search palette** — type to find bins by content, attribute, cabinet, drawer, or notes.
+- 📱 **Scan a QR → mobile detail page** — print the code, stick it on the bin, point your phone at it.
+- 🌓 **Light & dark themes** — clay-and-paper or VS Code-style. Respects `prefers-color-scheme`.
+- 📲 **Mobile layout** — narrow viewports get a bottom nav, a full-width search bar, and edge-to-edge cards. Desktop is untouched.
+- 💾 **Built-in backups** — automatic `pg_dump` on every restart and on a schedule, with a one-shot restore flag.
+
+---
 
 ## Quick start
 
+You need **Docker** and **docker-compose** (v2). Nothing else.
+
 ```bash
+git clone https://github.com/YOUR-FORK/gridfinity-organizer.git
+cd gridfinity-organizer
 docker compose up -d
 ```
 
-Then open **http://localhost:3000** in your browser.
+Open **<http://localhost:3000>** and you're in. The first launch seeds the database with 4 example drawers, 9 common Gridfinity box types, and an 11-tag content-type catalog so the UI has something to draw.
 
-The database is initialised automatically on first start with seed data
-(4 example drawers and 9 common box types).
+> 💡 **Want to use it from your phone too?** Open the app from your computer's LAN IP (e.g. `http://192.168.1.50:3000`) the very first time. QR codes encode whatever origin you visit the app from, so a code generated while you were on `localhost` won't be reachable from another device.
 
-## QR codes
+To stop the stack: `docker compose down`. To wipe everything (including data): `docker compose down -v`.
 
-Every bin has a unique ID. Clicking 📱 generates a QR code that encodes
-`http://<your-server-ip>:3000/bin/<id>`.
+---
 
-**For printing to work on mobile scans**, make sure the URL uses your
-machine's local network IP (e.g. `192.168.1.50`), not `localhost`.
-The app uses `window.location.origin` automatically — just open the
-app from the correct IP in your browser before generating QR codes.
+## Configuration
 
-You can print directly from the QR modal with the 🖨 Print button.
+All settings live in [`docker-compose.yml`](docker-compose.yml). The defaults work out of the box; tweak the env vars on the `backend` service to taste.
 
-## Port
+### Database
 
-The web UI is exposed on **port 3000**. To change it, edit `docker-compose.yml`:
+| Variable | Default | What it does |
+|---|---|---|
+| `DB_HOST` | `postgres` | Hostname of the Postgres service |
+| `DB_PORT` | `5432` | Postgres port |
+| `DB_NAME` | `gridfinity` | Database name |
+| `DB_USER` | `gridfinity` | Database role |
+| `DB_PASSWORD` | `gridfinity_pw` | **Change this** if you expose the app outside your LAN |
+| `PORT` | `3000` | HTTP port the backend listens on |
+
+### Backups
+
+The backend ships with a small backup module that runs `pg_dump` on every startup and on a recurring interval. Dumps land in a host directory you can browse and copy off-box.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `BACKUP_DIR` | `/backups` | Where dumps live inside the container (bind-mounted from `./backups` on the host) |
+| `BACKUP_INTERVAL_DAYS` | `7` | Schedule cadence in days. Set to `0` to disable the recurring dump (startup dump still runs) |
+| `BACKUP_RETAIN` | `14` | How many of the newest dumps to keep. Older ones are pruned after each new backup |
+| `RESTORE_FROM` | _(unset)_ | If set to a filename in `BACKUP_DIR`, the backend restores from it on boot **before** running migrations |
+
+### Changing the port
+
+Edit the `ports:` line in `docker-compose.yml`:
 
 ```yaml
-ports:
-  - "8080:3000"   # host:container
+backend:
+  ports:
+    - "8080:3000"   # host:container — visit http://localhost:8080
 ```
 
-## Data persistence
+---
 
-PostgreSQL data is stored in a named Docker volume (`postgres_data`).
-It survives container restarts and `docker compose down`.
-To wipe all data: `docker compose down -v`.
+## Using the app
+
+### Adding your first bin
+
+1. Click **+ Drawer** (top-right of the **Drawers** tab) and describe a real drawer — its cabinet, name, grid dimensions, and how tall stacks can go.
+2. Switch to **Box Types** and either pick one of the seeded shapes or add your own (e.g. `1×2×3`, `1×4 Div×3`).
+3. Back on **Inventory**, click **+ Bin**:
+   - Pick a content type (or type a new one — the catalog will pick it up).
+   - Enter the *attribute* — the specific thing inside: `M5×30`, `JST 2.54 mm`, etc.
+   - Choose the box type and the drawer.
+   - In the grid picker, click the top-left corner where the bin sits. The footprint highlights green.
+   - **↻ Rotate** swaps width and length for non-square bins.
+4. Save. The bin gets a numeric ID (`#1`, `#2`, …) and shows up in the list.
+
+### Printing the QR
+
+Open the bin in the inventory list. The detail pane on the right shows a small QR. Click **Print…** for a paper-friendly version, then stick it on the bin. Scanning the printed code on any phone opens a public page with the bin's contents, location, and another QR.
+
+### Renaming tags safely
+
+The **Content Types** tab is the source of truth for tag names. Editing a tag's name is one transactional `UPDATE` — every bin that referenced it now references the new name. Deleting a tag clears that field on the bins (`ON DELETE SET NULL`), so existing bins survive but lose their type label.
+
+### Switching themes
+
+Use the **☀️/🌙** toggle in the sidebar (or its mobile counterpart). The choice is saved to `localStorage`; first visits pick up your OS-level dark mode preference automatically.
+
+---
+
+## Backup & restore
+
+Backups are **already running** the moment you start the stack — no configuration needed. You'll see them appear in `./backups/`:
+
+```bash
+$ ls ./backups
+gridfinity-2026-05-15T18-00-57Z.sql
+gridfinity-2026-05-22T18-00-57Z.sql
+```
+
+### Manual backups
+
+The startup backup gives you a fresh dump on every restart, so the simplest "backup now" is:
+
+```bash
+docker compose restart backend
+```
+
+### Restoring a previous dump
+
+Pick a file from `./backups` and pass its name through the `RESTORE_FROM` env var:
+
+```bash
+RESTORE_FROM=gridfinity-2026-05-15T18-00-57Z.sql docker compose up -d backend
+```
+
+What happens on boot:
+
+1. The dump is applied with `psql -v ON_ERROR_STOP=1`. The dump uses `--clean --if-exists`, so it **wipes existing objects** and recreates them from the snapshot.
+2. The schema upgrade (`ensureSchema()`) runs so any newer migrations apply on top.
+3. A new startup backup is taken — so the pre-restore state is also captured.
+4. A `.last-restore` marker is written so subsequent restarts with the same `RESTORE_FROM` value are no-ops. To re-apply the same file, delete `./backups/.last-restore`.
+
+> ⚠️ Restore is a **full overwrite**, not a merge. If you only want to inspect a backup, copy the SQL file out and apply it to a separate database.
+
+### Disabling the schedule
+
+Set `BACKUP_INTERVAL_DAYS: 0` if you only want the startup dump.
+
+---
+
+## Architecture
+
+The whole app is two services:
+
+```
+┌──────────────────────────────┐
+│   backend (Node.js 20)       │
+│   ├── Express REST API       │
+│   ├── pg_dump / psql tools   │
+│   └── express.static SPA     │
+└────────────┬─────────────────┘
+             │ pg pool
+             ▼
+┌──────────────────────────────┐
+│   postgres (PostgreSQL 16)   │
+│   volume: postgres_data      │
+└──────────────────────────────┘
+```
+
+- **PostgreSQL 16** in a named volume — survives container restarts.
+- **Node.js 20 + Express 4 + `pg`** — no ORM, parameterised SQL everywhere.
+- **Vanilla JS SPA** under `backend/public/` — no bundler, no framework, no build step. The frontend is plain `<script>` files served by `express.static`. Theming is done with CSS custom properties; the only dependency loaded over the wire is `qrcodejs` from a CDN.
+- **No login.** This is a homelab tool — put it behind your reverse proxy / VPN if you expose it.
+
+### Project layout
+
+```
+gridfinity-organizer/
+├── docker-compose.yml              # postgres + backend services
+├── init.sql                        # schema DDL + seed (runs only on a fresh DB volume)
+├── backups/                        # SQL dumps land here (bind-mounted)
+└── backend/
+    ├── Dockerfile                  # node:20-alpine + postgresql16-client
+    ├── package.json                # deps: express, pg, cors
+    ├── server.js                   # REST routes + ensureSchema() migration
+    ├── backup.js                   # pg_dump / psql + retention + RESTORE_FROM
+    └── public/
+        ├── index.html              # thin shell — modals, root div, script tags
+        ├── icons/                  # SVG sprite (21 icons)
+        ├── styles/
+        │   ├── tokens.css          # design tokens — colors, type, spacing, motion
+        │   └── main.css            # component styles + mobile media block
+        └── js/
+            ├── core.js             # state, api helper, esc, contentHue, icon helper
+            ├── theme.js            # light/dark toggle + persistence
+            ├── app.js              # App namespace + shell render
+            └── views/              # one file per screen
+                ├── inventory.js
+                ├── locations.js
+                ├── box-types.js
+                ├── content-types.js
+                ├── search.js
+                ├── bin-form.js
+                ├── bin-scan.js
+                ├── drawer-map.js
+                └── qr.js
+```
+
+### Data model
+
+```
+locations ──┐
+            │ 1
+            ▼ *
+            bins ────┬───* box_types
+                     └───* content_types
+```
+
+- `locations` — one row per drawer; tracks cabinet name, drawer name, grid dimensions, and max stack height.
+- `box_types` — catalog of Gridfinity footprints (size, height, divided/compartments).
+- `content_types` — user-editable tag catalog. Bins reference by id, so renames are a single SQL `UPDATE`.
+- `bins` — the main table. Stores its own `grid_width`/`grid_length` (denormalised from `box_types`) so the placement grid never needs a join, and so the rotate button has somewhere to put the swapped dimensions.
+
+Schema migrations are additive and idempotent — they live in [`ensureSchema()`](backend/server.js) and run on every boot. The initial DDL in [`init.sql`](init.sql) only fires on a fresh Postgres volume.
+
+### REST API
+
+All routes are JSON. Parameterised queries via `pg`.
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` / `POST` | `/api/locations` | List or create drawers |
+| `GET` / `PUT` / `DELETE` | `/api/locations/:id` | Single drawer |
+| `GET` | `/api/locations/:id/bins` | Bins inside a drawer (drives the visual map) |
+| `GET` / `POST` | `/api/box-types` | List or create box types |
+| `GET` / `PUT` / `DELETE` | `/api/box-types/:id` | Single box type |
+| `GET` / `POST` | `/api/content-types` | List or create tags |
+| `GET` / `PUT` / `DELETE` | `/api/content-types/:id` | Single tag — rename cascades through the FK |
+| `GET` | `/api/bins/search?q=` | Substring match across content, attribute, location, notes |
+| `GET` / `POST` | `/api/bins` | List or create bins |
+| `GET` / `PUT` / `DELETE` | `/api/bins/:id` | Single bin |
+| `GET` | `/bin/:id` | Public scan page (serves the SPA, which renders the detail) |
+
+---
 
 ## Development
 
-To run the backend locally (with a local Postgres):
+Everything is in `backend/`. There's no separate frontend build — edits to the static assets show up on the next browser refresh **after** a container rebuild.
+
+### Live-edit loop
+
+The Dockerfile bakes `backend/public/` into the image, so editing files on the host doesn't auto-reflect. Two options:
+
+**Option A — rebuild on each change** (simple, what the default compose does):
+
+```bash
+docker compose build backend && docker compose up -d backend
+```
+
+**Option B — bind-mount the public directory** (true live-edit; refresh the browser):
+
+```yaml
+# docker-compose.yml — add under the backend service
+backend:
+  volumes:
+    - ./backups:/backups
+    - ./backend/public:/app/public:ro   # add this line
+```
+
+### Running the backend on the host (no Docker)
+
+You still need a Postgres reachable somewhere:
 
 ```bash
 cd backend
 npm install
-DB_HOST=localhost DB_USER=gridfinity DB_PASSWORD=gridfinity_pw DB_NAME=gridfinity node server.js
+DB_HOST=localhost \
+DB_USER=gridfinity \
+DB_PASSWORD=gridfinity_pw \
+DB_NAME=gridfinity \
+node server.js
 ```
+
+### Talking to Postgres directly
+
+```bash
+docker compose exec postgres psql -U gridfinity -d gridfinity
+```
+
+### No tests, no linter
+
+This is a hobby project — there's no test suite or eslint config to run. Verify changes by exercising the UI in a browser; the golden paths are: add bin → place on grid → rotate → save; rename a tag and check existing bins update; scan a printed QR.
+
+---
+
+## Customising the look
+
+All visual decisions are in CSS variables defined in [`tokens.css`](backend/public/styles/tokens.css). Want a different accent? Override `--accent` for the relevant theme block:
+
+```css
+/* in a new <style> block, or appended to main.css */
+[data-theme="light"] {
+  --accent: #6f42c1;   /* purple instead of clay */
+}
+```
+
+The four `--hue-1` … `--hue-4` tokens drive the multi-color taxonomy. Edit those and every content-tag pill picks up the new palette automatically.
+
+---
+
+## Roadmap
+
+Things that would make sensible next features (none of these ship today):
+
+- **Authentication** — currently the app is wide open. Behind a reverse proxy with basic auth or OIDC is the typical homelab pattern.
+- **Image upload** — attach a photo to each bin. Needs an `image_url` column on `bins` plus a file-upload endpoint.
+- **Bulk QR printing** — "print every QR in this drawer" as a single page.
+- **Quantity & low-stock alerts** — `quantity` and `min_quantity` columns on `bins`, with a dashboard widget.
+- **Drag-and-drop in the drawer map** — today you place via the modal grid picker; dragging tiles around in the cabinet view would be slicker.
+- **⌘K command palette overlay** — there's a search *page* but no global overlay yet.
+
+PRs welcome.
+
+---
+
+## License
+
+MIT. Use it, fork it, sell consultancy around it — just don't blame me if you misplace a bolt.
