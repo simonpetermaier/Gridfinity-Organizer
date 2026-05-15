@@ -4,6 +4,7 @@ const express = require('express');
 const { Pool }  = require('pg');
 const cors      = require('cors');
 const path      = require('path');
+const { restoreIfRequested, initBackupSchedule } = require('./backup');
 
 const app  = express();
 const pool = new Pool({
@@ -380,6 +381,11 @@ app.get('*', (_req, res) => {
 });
 
 const PORT = parseInt(process.env.PORT || '3000');
-ensureSchema()
+// Boot order: restore (one-shot, if RESTORE_FROM set) → schema migrations →
+// startup dump + schedule → listen. Any failure aborts so the container
+// doesn't serve traffic against a half-initialised DB.
+restoreIfRequested()
+  .then(() => ensureSchema())
+  .then(() => initBackupSchedule())
   .then(() => app.listen(PORT, () => console.log(`Gridfinity Organizer → http://localhost:${PORT}`)))
-  .catch(e => { console.error('Schema init failed:', e); process.exit(1); });
+  .catch(e => { console.error('Startup failed:', e); process.exit(1); });

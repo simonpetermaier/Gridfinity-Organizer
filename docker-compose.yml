@@ -28,6 +28,16 @@ services:
       DB_USER: gridfinity
       DB_PASSWORD: gridfinity_pw
       PORT: 3000
+      # Backup / restore configuration — see backend/backup.js for details.
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_DAYS: 7    # 0 disables the recurring dump
+      BACKUP_RETAIN: 5           # max number of dumps kept
+      # Restore by setting on the command line:
+      #   RESTORE_FROM=gridfinity-2026-05-15T18-30-45Z.sql docker compose up -d backend
+      # Marker file prevents accidental re-restore on subsequent restarts.
+      RESTORE_FROM: ${RESTORE_FROM:-}
+    volumes:
+      - ./backups:/backups
     ports:
       - "3000:3000"
     depends_on:
