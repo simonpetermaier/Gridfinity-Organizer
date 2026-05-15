@@ -4,99 +4,112 @@ Object.assign(App, {
 
   renderBoxTypes() {
     return `
-      <div class="flex justify-between items-center mb-5">
-        <h2 class="text-lg font-semibold">Box Types
-          <span class="ml-2 text-sm font-normal text-gray-400">${S.boxTypes.length} types</span>
-        </h2>
-        <button onclick="App.showAddBoxType()"
-          class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700">
-          + Add Box Type
-        </button>
+      <div class="page-header">
+        <h1 class="page-title">Box Types</h1>
+        <span class="count-chip">${S.boxTypes.length} types</span>
       </div>
-      <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead class="bg-gray-50 border-b border-gray-100">
-              <tr>
-                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Name</th>
-                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Footprint</th>
-                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Height</th>
-                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Divided</th>
-                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Description</th>
-                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Actions</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-50">
-              ${S.boxTypes.length ? S.boxTypes.map(bt => `
-                <tr class="hover:bg-slate-50 group">
-                  <td class="px-4 py-3 font-semibold text-gray-900">${esc(bt.name)}</td>
-                  <td class="px-4 py-3 font-mono text-gray-600">${bt.grid_width}×${bt.grid_length}</td>
-                  <td class="px-4 py-3 text-gray-600">${bt.grid_height_u}U</td>
-                  <td class="px-4 py-3">
-                    ${bt.is_divided
-                      ? `<span class="text-green-600 font-medium">✓ ${bt.compartments} comp.</span>`
-                      : `<span class="text-gray-300">—</span>`}
-                  </td>
-                  <td class="px-4 py-3 text-gray-400 text-xs">${esc(bt.description || '—')}</td>
-                  <td class="px-4 py-3">
-                    <div class="flex gap-0.5 opacity-60 group-hover:opacity-100">
-                      <button onclick="App.showEditBoxType(${bt.id})" class="p-1.5 rounded hover:bg-green-50 hover:text-green-600">✏️</button>
-                      <button onclick="App.deleteBoxType(${bt.id})" class="p-1.5 rounded hover:bg-red-50 hover:text-red-600">🗑️</button>
-                    </div>
-                  </td>
-                </tr>`).join('') : `
-                <tr><td colspan="6" class="px-4 py-12 text-center text-gray-400">No box types yet.</td></tr>`}
-            </tbody>
-          </table>
+
+      ${S.boxTypes.length ? `
+        <div class="box-gallery">
+          ${S.boxTypes.map(bt => this._boxCard(bt)).join('')}
         </div>
+      ` : `
+        <div class="card" style="text-align:center; padding:48px 16px;">
+          <div class="mute">No box types yet. Add one from the top right.</div>
+        </div>`}
+    `;
+  },
+
+  _boxCard(bt) {
+    return `
+      <div class="box-card">
+        <div class="actions">
+          <button class="icon-btn" title="Edit" onclick="App.showEditBoxType(${bt.id})">${icon('pencil', 16)}</button>
+          <button class="icon-btn" title="Delete" onclick="App.deleteBoxType(${bt.id})">${icon('trash', 16)}</button>
+        </div>
+        <div class="shape">${this._boxShape(bt)}</div>
+        <div class="name mono">${esc(bt.name)}</div>
+        <div class="sub">${bt.grid_width}×${bt.grid_length} · ${bt.grid_height_u}U${bt.is_divided ? ' · ' + bt.compartments + ' comp.' : ''}</div>
+        ${bt.description ? `<div class="sub mute" style="font-style:italic;">${esc(bt.description)}</div>` : ''}
       </div>`;
   },
 
+  _boxShape(bt) {
+    const cell = 18;
+    const w = bt.grid_width, h = bt.grid_length;
+    const divLines = [];
+    if (bt.is_divided) {
+      // Distribute dashed lines evenly across the long axis based on compartment count.
+      const comp = Math.max(1, bt.compartments || 1);
+      const horiz = h >= w;
+      for (let i = 1; i < comp; i++) {
+        const p = (i / comp);
+        if (horiz) {
+          divLines.push(`<line x1="0" y1="${h*cell*p}" x2="${w*cell}" y2="${h*cell*p}"
+            stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="2 2"/>`);
+        } else {
+          divLines.push(`<line x1="${w*cell*p}" y1="0" x2="${w*cell*p}" y2="${h*cell}"
+            stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="2 2"/>`);
+        }
+      }
+    }
+    let grid = '';
+    for (let i = 1; i < w; i++) {
+      grid += `<line x1="${i*cell}" y1="0" x2="${i*cell}" y2="${h*cell}" stroke="var(--accent)" stroke-width="0.6" opacity="0.4"/>`;
+    }
+    for (let i = 1; i < h; i++) {
+      grid += `<line x1="0" y1="${i*cell}" x2="${w*cell}" y2="${i*cell}" stroke="var(--accent)" stroke-width="0.6" opacity="0.4"/>`;
+    }
+    return `
+      <svg width="${w*cell + 4}" height="${h*cell + 4}" style="overflow:visible;" role="img" aria-label="${esc(bt.name)} footprint">
+        <g transform="translate(2,2)">
+          <rect x="0" y="0" width="${w*cell}" height="${h*cell}" rx="2"
+            fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+          ${grid}
+          ${divLines.join('')}
+        </g>
+      </svg>`;
+  },
+
+  // ── Box-type modal ───────────────────────────────────────────
   _btForm(bt = {}) {
     return `
-      <div class="space-y-4">
+      <div>
+        <label class="field-label">Name</label>
+        <input class="input" id="f-name" value="${esc(bt.name || '')}" placeholder="e.g. 1×2×3">
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; margin-top:16px;">
         <div>
-          <label class="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">Name</label>
-          <input id="f-name" value="${esc(bt.name || '')}" placeholder="e.g. 1×2×3"
-            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-        </div>
-        <div class="grid grid-cols-3 gap-4">
-          <div>
-            <label class="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">Width (X)</label>
-            <input id="f-gw" type="number" value="${bt.grid_width || 1}" min="1"
-              class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-          </div>
-          <div>
-            <label class="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">Length (Y)</label>
-            <input id="f-gl" type="number" value="${bt.grid_length || 1}" min="1"
-              class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-          </div>
-          <div>
-            <label class="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">Height (U)</label>
-            <input id="f-gh" type="number" value="${bt.grid_height_u || 3}" min="1"
-              class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-          </div>
-        </div>
-        <div class="flex items-center gap-6 bg-slate-50 rounded-lg p-3">
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input id="f-div" type="checkbox" ${bt.is_divided ? 'checked' : ''} class="w-4 h-4 rounded text-blue-600">
-            <span class="text-sm font-medium text-gray-700">Divided bin</span>
-          </label>
-          <div class="flex items-center gap-2">
-            <label class="text-sm text-gray-600" for="f-comp">Compartments:</label>
-            <input id="f-comp" type="number" value="${bt.compartments || 1}" min="1" max="20"
-              class="w-20 border border-gray-300 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-          </div>
+          <label class="field-label">Width (X)</label>
+          <input class="input" id="f-gw" type="number" value="${bt.grid_width || 1}" min="1">
         </div>
         <div>
-          <label class="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">Description</label>
-          <textarea id="f-desc" rows="2" placeholder="Optional description"
-            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">${esc(bt.description || '')}</textarea>
+          <label class="field-label">Length (Y)</label>
+          <input class="input" id="f-gl" type="number" value="${bt.grid_length || 1}" min="1">
+        </div>
+        <div>
+          <label class="field-label">Height (U)</label>
+          <input class="input" id="f-gh" type="number" value="${bt.grid_height_u || 3}" min="1">
         </div>
       </div>
-      <div class="flex gap-3 justify-end mt-6 pt-4 border-t border-gray-100">
-        <button onclick="App.closeModal()" class="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
-        <button onclick="App.saveBoxType(${bt.id || ''})" class="px-5 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">Save</button>
+      <div style="display:flex; align-items:center; gap:24px; margin-top:16px; padding:12px;
+                  background:var(--soft); border-radius:var(--radius-md);">
+        <label style="display:inline-flex; align-items:center; gap:8px; cursor:pointer;">
+          <input id="f-div" type="checkbox" ${bt.is_divided ? 'checked' : ''}>
+          <span style="font-size:var(--text-sm); font-weight:500;">Divided bin</span>
+        </label>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <label class="field-label" style="margin:0;" for="f-comp">Compartments</label>
+          <input class="input" id="f-comp" type="number" value="${bt.compartments || 1}" min="1" max="20" style="width:72px; height:32px;">
+        </div>
+      </div>
+      <div style="margin-top:16px;">
+        <label class="field-label">Description</label>
+        <textarea class="input" id="f-desc" rows="2" placeholder="Optional description">${esc(bt.description || '')}</textarea>
+      </div>
+      <div class="modal-footer" style="border-top:1px solid var(--line-soft); margin:24px -20px -16px; padding:16px 20px 12px;">
+        <button class="btn btn-secondary" onclick="App.closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="App.saveBoxType(${bt.id || ''})">Save</button>
       </div>`;
   },
 
@@ -120,7 +133,7 @@ Object.assign(App, {
       await this.loadBoxTypes();
       this.closeModal();
       this.render();
-      toast(id ? 'Box type updated ✓' : 'Box type created ✓');
+      toast(id ? 'Box type updated' : 'Box type created');
     } catch (e) { alert('Error: ' + e.message); }
   },
 

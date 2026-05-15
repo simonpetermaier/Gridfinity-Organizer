@@ -1,0 +1,200 @@
+/* Gridfinity Organizer — Bold redesign tokens
+   Drop this into your global stylesheet (or import it).
+   Apply themes by setting:  <html data-theme="light">  or  <html data-theme="dark">
+   The :root block is a fallback (= light). */
+
+:root,
+[data-theme="light"] {
+  /* Surfaces */
+  --bg:        #faf6ee;
+  --panel:     #f3ede0;
+  --surface:   #ffffff;
+  --soft:      rgba(42, 37, 32, 0.05);
+  --softer:    rgba(42, 37, 32, 0.025);
+
+  /* Text */
+  --ink:       #2a2520;
+  --mute:      #8a8275;
+
+  /* Lines */
+  --line:      rgba(42, 37, 32, 0.32);
+  --line-soft: rgba(42, 37, 32, 0.12);
+
+  /* Brand / accent (warm clay) */
+  --accent:        #c4633c;
+  --accent-fg:     #ffffff;
+  --accent-soft:   rgba(196, 99, 60, 0.12);
+  --accent-strong: #a8522f;
+
+  /* Status */
+  --success: #5b7a3a;
+  --danger:  #b04a3a;
+  --warning: #b58b2f;
+
+  /* Optional secondary accents (unused by default, available if you want a
+     multi-color content-type taxonomy) */
+  --hue-1: #7a6acc;
+  --hue-2: #4e8a8a;
+  --hue-3: #b59a3d;
+  --hue-4: #7a9a4e;
+
+  /* Elevation */
+  --shadow-1:   0 1px 2px rgba(42, 37, 32, 0.04);
+  --shadow-2:   0 4px 12px rgba(42, 37, 32, 0.06),
+                0 1px 2px rgba(42, 37, 32, 0.04);
+  --shadow-pop: 0 12px 32px rgba(42, 37, 32, 0.12),
+                0 2px 6px rgba(42, 37, 32, 0.06);
+
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  /* Surfaces */
+  --bg:        #1e1e1e;
+  --panel:     #252526;
+  --surface:   #2d2d2d;
+  --soft:      rgba(255, 255, 255, 0.04);
+  --softer:    rgba(255, 255, 255, 0.02);
+
+  /* Text */
+  --ink:       #d4d4d4;
+  --mute:      #7a7a7a;
+
+  /* Lines */
+  --line:      rgba(212, 212, 212, 0.28);
+  --line-soft: rgba(212, 212, 212, 0.10);
+
+  /* Brand / accent (syntax blue) */
+  --accent:        #569cd6;
+  --accent-fg:     #ffffff;
+  --accent-soft:   rgba(86, 156, 214, 0.15);
+  --accent-strong: #6fb1e8;
+
+  /* Status */
+  --success: #6cba6c;
+  --danger:  #f48771;
+  --warning: #dcdcaa;
+
+  /* Optional syntax-palette accents for multi-color content types */
+  --hue-1: #569cd6; /* blue */
+  --hue-2: #4ec9b0; /* teal */
+  --hue-3: #dcdcaa; /* yellow */
+  --hue-4: #ce9178; /* orange */
+
+  /* Elevation */
+  --shadow-1:   0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2:   0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.6);
+
+  color-scheme: dark;
+}
+
+/* ───────── Typography ───────── */
+:root {
+  --font-sans:    ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+                  "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono:    ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas,
+                  "Liberation Mono", monospace;
+  --font-display: "Source Serif 4", "Iowan Old Style", "Charter", Georgia, serif;
+
+  /* Type scale */
+  --text-xs:   11px;
+  --text-sm:   12px;
+  --text-base: 14px;
+  --text-md:   16px;
+  --text-lg:   18px;
+  --text-xl:   22px;
+  --text-2xl:  28px;
+
+  --line-tight: 1.2;
+  --line-body:  1.5;
+  --tracking-caps: 0.06em;
+
+  /* Spacing scale (4-based) */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* Radii */
+  --radius-sm:   4px;
+  --radius-md:   6px;
+  --radius-lg:   10px;
+  --radius-xl:   14px;
+  --radius-pill: 999px;
+
+  /* Motion */
+  --ease:     cubic-bezier(.2, .7, .3, 1);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 260ms;
+
+  /* Layout */
+  --sidebar-w:          220px;
+  --sidebar-w-collapsed: 64px;
+  --topbar-h:            52px;
+}
+
+/* ───────── Base + theme transition ───────── */
+
+html, body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--line-body);
+}
+
+html {
+  transition:
+    background-color var(--dur-base) var(--ease),
+    color           var(--dur-base) var(--ease);
+}
+html *,
+html *::before,
+html *::after {
+  transition:
+    background-color var(--dur-base) var(--ease),
+    border-color     var(--dur-base) var(--ease),
+    color            var(--dur-base) var(--ease),
+    fill             var(--dur-base) var(--ease),
+    stroke           var(--dur-base) var(--ease);
+}
+/* Don't apply transitions on first paint (avoid the FOUC flash):
+   add data-theme-ready="1" to <html> after first render. */
+html:not([data-theme-ready]) *,
+html:not([data-theme-ready]) *::before,
+html:not([data-theme-ready]) *::after {
+  transition: none !important;
+}
+
+/* ───────── Focus ring ───────── */
+
+:where(:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--radius-sm);
+}
+
+/* ───────── Selection ───────── */
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+/* ───────── Tiny utility helpers (optional — delete if you don't use them) ───────── */
+
+.gf-mono { font-family: var(--font-mono); }
+.gf-mute { color: var(--mute); }
+.gf-caps {
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  font-size: var(--text-xs);
+  color: var(--mute);
+}

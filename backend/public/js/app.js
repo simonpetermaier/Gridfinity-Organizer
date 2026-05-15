@@ -1,63 +1,121 @@
 'use strict';
 
-// ═══════════════════════════════════════════════════════════════
-// APP NAMESPACE — view files extend this via Object.assign
-// ═══════════════════════════════════════════════════════════════
+const NAV = [
+  { id: 'inventory',     label: 'Inventory',     icon: 'box' },
+  { id: 'locations',     label: 'Drawers',       icon: 'drawer' },
+  { id: 'box-types',     label: 'Box Types',     icon: 'grid' },
+  { id: 'content-types', label: 'Content Types', icon: 'tag' },
+  { id: 'search',        label: 'Search',        icon: 'search' },
+];
+
+const TAB_TITLE = {
+  'inventory':     'Inventory',
+  'locations':     'Drawers',
+  'box-types':     'Box Types',
+  'content-types': 'Content Types',
+  'search':        'Search',
+};
+
 const App = {
 
-  // ── bootstrap ──────────────────────────────────────────────
   async init() {
-    // Check if we're on the /bin/:id scan page
+    // Sprite first so the first paint has icons; small file, served same-origin.
+    await injectIconSprite();
+
+    // Bin scan page (mobile, no shell)
     const m = window.location.pathname.match(/^\/bin\/(\d+)$/);
     if (m) { await this.renderBinScan(m[1]); return; }
 
-    await Promise.all([this.loadLocations(), this.loadBoxTypes(), this.loadContentTypes(), this.loadBins()]);
+    await Promise.all([
+      this.loadLocations(), this.loadBoxTypes(),
+      this.loadContentTypes(), this.loadBins(),
+    ]);
     this.render();
   },
 
-  // ── data loaders ───────────────────────────────────────────
   async loadLocations()    { S.locations    = await api.get('/locations'); },
   async loadBoxTypes()     { S.boxTypes     = await api.get('/box-types'); },
   async loadContentTypes() { S.contentTypes = await api.get('/content-types'); },
   async loadBins()         { S.bins         = await api.get('/bins'); },
 
-  // ── main render ────────────────────────────────────────────
+  switchTab(tab) {
+    S.tab = tab;
+    if (tab !== 'inventory') S.selectedBinId = null;
+    this.render();
+  },
+
+  // ── Top-level shell render ────────────────────────────────────
   render() {
     $('root').innerHTML = `
-      <div class="min-h-screen flex flex-col">
-        ${this.renderHeader()}
-        <main class="flex-1 max-w-7xl mx-auto w-full px-4 py-6 fade-in">
-          ${this.renderTab()}
-        </main>
+      <div class="shell">
+        ${this.renderSidebar()}
+        <div class="main">
+          ${this.renderTopbar()}
+          <div class="page">${this.renderTab()}</div>
+        </div>
       </div>`;
   },
 
-  renderHeader() {
-    const tabs = [
-      { id: 'inventory',     icon: '📦', label: 'Inventory'     },
-      { id: 'locations',     icon: '🗄️', label: 'Drawers'       },
-      { id: 'box-types',     icon: '📐', label: 'Box Types'     },
-      { id: 'content-types', icon: '🏷️', label: 'Content Types' },
-      { id: 'search',        icon: '🔍', label: 'Search'        },
-    ];
+  renderSidebar() {
     return `
-      <header class="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-30">
-        <div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3">
-          <span class="text-2xl">🗄️</span>
+      <aside class="sidebar" aria-label="Primary">
+        <div class="sidebar-brand">
+          <div class="sidebar-brand-mark">${icon('brand', 20)}</div>
           <div>
-            <div class="font-bold text-gray-900 leading-tight">Gridfinity Organizer</div>
-            <div class="text-xs text-gray-400">Workshop inventory system</div>
+            <div class="sidebar-brand-title">Gridfinity</div>
+            <div class="sidebar-brand-sub">Organizer</div>
           </div>
-          <span class="ml-auto text-xs text-gray-400">${S.bins.length} bins · ${S.locations.length} drawers</span>
         </div>
-        <div class="max-w-7xl mx-auto px-4 flex gap-0 overflow-x-auto">
-          ${tabs.map(t => `
-            <button onclick="App.switchTab('${t.id}')"
-              class="tab-btn px-5 py-2.5 text-sm text-gray-500 hover:text-blue-600 whitespace-nowrap transition-colors ${S.tab === t.id ? 'active' : ''}">
-              ${t.icon} ${t.label}
+        <nav>
+          ${NAV.map(n => `
+            <button class="nav-item ${S.tab === n.id ? 'active' : ''}"
+                    onclick="App.switchTab('${n.id}')"
+                    ${S.tab === n.id ? 'aria-current="page"' : ''}>
+              <span class="nav-ico">${icon(n.icon, 16)}</span>
+              <span>${n.label}</span>
             </button>`).join('')}
+        </nav>
+        <div class="sidebar-spacer"></div>
+        <div class="sidebar-stats">
+          <div class="sidebar-stats-label">This workspace</div>
+          <div class="sidebar-stats-value">${S.bins.length} bins · ${S.locations.length} drawers</div>
         </div>
+        <button class="theme-toggle" onclick="Theme.toggle()" aria-label="Toggle theme">
+          ${icon(S.theme === 'dark' ? 'moon' : 'sun', 14)}
+          <span class="lbl">Theme</span>
+          <span class="state">${S.theme === 'dark' ? 'Dark' : 'Light'}</span>
+        </button>
+      </aside>`;
+  },
+
+  renderTopbar() {
+    const action = this.renderTopAction();
+    return `
+      <header class="topbar">
+        <div class="crumbs">
+          <span class="crumb">Workspace</span>
+          <span class="crumb-sep">${icon('chevron', 10)}</span>
+          <span class="crumb current">${TAB_TITLE[S.tab] || ''}</span>
+        </div>
+        <div class="topbar-spacer"></div>
+        <button class="qf-pill" onclick="App.switchTab('search')" aria-label="Jump to search">
+          ${icon('search', 14)}
+          <span class="qf-text">Jump to a bin, drawer, or type…</span>
+          <span class="kbd">/</span>
+        </button>
+        ${action || ''}
       </header>`;
+  },
+
+  renderTopAction() {
+    const plus = icon('plus', 14);
+    switch (S.tab) {
+      case 'inventory':     return `<button class="btn btn-primary" onclick="App.showAddBin()">${plus} Bin</button>`;
+      case 'locations':     return `<button class="btn btn-primary" onclick="App.showAddLocation()">${plus} Drawer</button>`;
+      case 'box-types':     return `<button class="btn btn-primary" onclick="App.showAddBoxType()">${plus} Box Type</button>`;
+      case 'content-types': return `<button class="btn btn-primary" onclick="App.showAddContentType()">${plus} Type</button>`;
+      default:              return '';
+    }
   },
 
   renderTab() {
@@ -70,11 +128,7 @@ const App = {
     }
   },
 
-  switchTab(tab) { S.tab = tab; this.render(); },
-
-  // ══════════════════════════════════════════════════════════
-  // MODAL HELPERS
-  // ══════════════════════════════════════════════════════════
+  // ── Modal helpers ────────────────────────────────────────────
   openModal(title, html) {
     $('modal-title').textContent = title;
     $('modal-body').innerHTML = html;

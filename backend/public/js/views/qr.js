@@ -14,7 +14,7 @@ Object.assign(App, {
     $('qr-overlay').classList.remove('hidden');
     new QRCode($('qr-box'), {
       text: url, width: 200, height: 200,
-      colorDark: '#1e40af', colorLight: '#ffffff',
+      colorDark: '#000', colorLight: '#ffffff',
       correctLevel: QRCode.CorrectLevel.M,
     });
   },
@@ -26,11 +26,11 @@ Object.assign(App, {
     const url = `${window.location.origin}/bin/${b.id}`;
     const pa  = $('print-area');
     pa.innerHTML = `
-      <div style="display:flex;flex-direction:column;align-items:center;padding:16px;font-family:sans-serif;">
-        <div style="font-size:22px;font-weight:bold;margin-bottom:4px;">#${b.id} · ${b.attribute || b.content_type || ''}</div>
-        <div style="font-size:12px;color:#555;margin-bottom:12px;">${b.cabinet_id || ''} / ${b.drawer_id || ''}</div>
+      <div style="display:flex; flex-direction:column; align-items:center; padding:16px; font-family:sans-serif; color:#000;">
+        <div style="font-size:22px; font-weight:700; margin-bottom:4px;">#${b.id} · ${esc(b.attribute || b.content_type || '')}</div>
+        <div style="font-size:12px; color:#555; margin-bottom:12px;">${esc(b.cabinet_id || '')} / ${esc(b.drawer_id || '')}</div>
         <div id="print-qr-inner"></div>
-        <div style="font-size:9px;color:#999;margin-top:8px;">${url}</div>
+        <div style="font-size:9px; color:#999; margin-top:8px;">${url}</div>
       </div>`;
     new QRCode(pa.querySelector('#print-qr-inner'), {
       text: url, width: 180, height: 180,

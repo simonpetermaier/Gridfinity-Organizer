@@ -5,45 +5,52 @@ Object.assign(App, {
   renderContentTypes() {
     const usage = {};
     for (const b of S.bins) if (b.content_type) usage[b.content_type] = (usage[b.content_type] || 0) + 1;
+    const inUseCount = S.contentTypes.filter(ct => usage[ct.name]).length;
+    const maxUsage = Math.max(1, ...Object.values(usage));
+    const filterAll = !S.ctFilter || S.ctFilter === 'all';
 
     return `
-      <div class="flex justify-between items-center mb-5">
-        <h2 class="text-lg font-semibold">Content Types
-          <span class="ml-2 text-sm font-normal text-gray-400">${S.contentTypes.length} tags</span>
-        </h2>
-        <button onclick="App.showAddContentType()"
-          class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700">
-          + Add Content Type
-        </button>
+      <div class="page-header">
+        <h1 class="page-title">Content Types</h1>
+        <span class="count-chip">${S.contentTypes.length} tags · ${inUseCount} in use</span>
+        <span style="flex:1"></span>
+        <button class="pill ${filterAll ? 'active' : ''}" onclick="S.ctFilter='all';App.render()">All</button>
+        <button class="pill ${S.ctFilter === 'inuse' ? 'active' : ''}" onclick="S.ctFilter='inuse';App.render()">In use</button>
       </div>
-      <p class="text-xs text-gray-400 mb-4">
-        These tags populate the <em>Content Type</em> dropdown in the bin form. Renaming a tag also updates every bin that already uses it.
+
+      <p class="mute" style="font-size:var(--text-xs); font-style:italic; margin: 0 0 16px;">
+        Tags here power the Content Type dropdown when adding a bin. Renaming updates everywhere.
       </p>
-      <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead class="bg-gray-50 border-b border-gray-100">
-              <tr>
-                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Name</th>
-                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">In use</th>
-                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Actions</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-50">
-              ${S.contentTypes.length ? S.contentTypes.map(ct => `
-                <tr class="hover:bg-slate-50 group">
-                  <td class="px-4 py-3 font-medium text-gray-900">${esc(ct.name)}</td>
-                  <td class="px-4 py-3 text-xs text-gray-500">${usage[ct.name] || 0} bin${(usage[ct.name] || 0) !== 1 ? 's' : ''}</td>
-                  <td class="px-4 py-3">
-                    <div class="flex gap-0.5 opacity-60 group-hover:opacity-100">
-                      <button onclick="App.showEditContentType(${ct.id})" class="p-1.5 rounded hover:bg-green-50 hover:text-green-600">✏️</button>
-                      <button onclick="App.deleteContentType(${ct.id})" class="p-1.5 rounded hover:bg-red-50 hover:text-red-600">🗑️</button>
-                    </div>
-                  </td>
-                </tr>`).join('') : `
-                <tr><td colspan="3" class="px-4 py-12 text-center text-gray-400">No content types yet.</td></tr>`}
-            </tbody>
-          </table>
+
+      ${S.contentTypes.length ? `
+        <div class="tag-grid">
+          ${S.contentTypes.filter(ct => filterAll || usage[ct.name]).map(ct => this._tagCard(ct, usage[ct.name] || 0, maxUsage)).join('') ||
+            '<div class="mute">Nothing matches that filter.</div>'}
+        </div>
+      ` : `
+        <div class="card" style="text-align:center; padding:48px 16px;">
+          <div class="mute">No content types yet. Add one from the top right.</div>
+        </div>`}
+    `;
+  },
+
+  _tagCard(ct, count, max) {
+    const inUse = count > 0;
+    const pct = Math.round((count / max) * 100);
+    // Always apply the hue: unused cards keep ink colors (since .in-use is what
+    // pulls --accent into the border / name), but the usage bar fill still picks
+    // up the hue so the dormant tag has a visual identity.
+    return `
+      <div class="tag-card ${inUse ? 'in-use' : ''} ${hueClass(ct.name)}">
+        <div class="ico">${icon('tag', 18)}</div>
+        <div class="info">
+          <div class="name">${esc(ct.name)}</div>
+          <div class="usage">${inUse ? count + ' bin' + (count !== 1 ? 's' : '') : 'unused'}</div>
+        </div>
+        <div class="bar"><div class="bar-fill" style="width:${pct}%"></div></div>
+        <div class="menu">
+          <button class="icon-btn" title="Edit" onclick="App.showEditContentType(${ct.id})">${icon('pencil', 16)}</button>
+          <button class="icon-btn" title="Delete" onclick="App.deleteContentType(${ct.id})">${icon('trash', 16)}</button>
         </div>
       </div>`;
   },
@@ -51,13 +58,12 @@ Object.assign(App, {
   _ctForm(ct = {}) {
     return `
       <div>
-        <label class="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">Name</label>
-        <input id="f-ctname" value="${esc(ct.name || '')}" placeholder="e.g. Bolt"
-          class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <label class="field-label">Name</label>
+        <input class="input" id="f-ctname" value="${esc(ct.name || '')}" placeholder="e.g. Bolt" autofocus>
       </div>
-      <div class="flex gap-3 justify-end mt-6 pt-4 border-t border-gray-100">
-        <button onclick="App.closeModal()" class="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
-        <button onclick="App.saveContentType(${ct.id || ''})" class="px-5 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">Save</button>
+      <div class="modal-footer" style="border-top:1px solid var(--line-soft); margin:24px -20px -16px; padding:16px 20px 12px;">
+        <button class="btn btn-secondary" onclick="App.closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="App.saveContentType(${ct.id || ''})">Save</button>
       </div>`;
   },
 
@@ -70,11 +76,10 @@ Object.assign(App, {
     try {
       if (id) await api.put('/content-types/' + id, { name });
       else    await api.post('/content-types', { name });
-      // Reload bins too because rename cascades to bin rows.
       await Promise.all([this.loadContentTypes(), this.loadBins()]);
       this.closeModal();
       this.render();
-      toast(id ? 'Content type updated ✓' : 'Content type created ✓');
+      toast(id ? 'Content type updated' : 'Content type created');
     } catch (e) { alert('Error: ' + e.message); }
   },
 
@@ -87,7 +92,6 @@ Object.assign(App, {
     if (!confirm(msg)) return;
     try {
       await api.delete('/content-types/' + id);
-      // Reload bins too — affected rows just had content_type_id cleared by ON DELETE SET NULL.
       await Promise.all([this.loadContentTypes(), this.loadBins()]);
       this.render();
       toast('Content type deleted');
