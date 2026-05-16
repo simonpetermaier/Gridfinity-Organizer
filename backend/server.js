@@ -28,6 +28,25 @@ function notFound(res)  { res.status(404).json({ error: 'Not found' }); }
 // volume). Creates new tables if missing and seeds them only when empty —
 // user deletions are preserved across restarts.
 async function ensureSchema() {
+  // Key/value store for runtime-mutable settings. Currently just qr_payload_mode
+  // but a stable home for future flags (theme defaults, retention overrides, …).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key   VARCHAR(64) PRIMARY KEY,
+      value TEXT
+    )
+  `);
+  // Seed qr_payload_mode from the env var on first boot only. After that the
+  // DB row wins — changing QR_PAYLOAD_MODE in compose doesn't override the
+  // user's choice from the UI.
+  const envMode = (process.env.QR_PAYLOAD_MODE || 'url').toLowerCase();
+  const seedMode = envMode === 'id' ? 'id' : 'url';
+  await pool.query(
+    `INSERT INTO app_settings (key, value) VALUES ('qr_payload_mode', $1)
+       ON CONFLICT (key) DO NOTHING`,
+    [seedMode]
+  );
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS content_types (
       id   SERIAL PRIMARY KEY,
@@ -372,6 +391,37 @@ app.delete('/api/content-types/:id', async (req, res) => {
   try {
     await pool.query('DELETE FROM content_types WHERE id=$1', [req.params.id]);
     ok(res, { success: true });
+  } catch (e) { err(res, e); }
+});
+
+// ============================================================
+// CLIENT CONFIG — runtime-mutable settings persisted in
+// app_settings. The env var QR_PAYLOAD_MODE only seeds the
+// initial value on a fresh DB; after that, the UI is the
+// source of truth.
+// ============================================================
+app.get('/api/config', async (_req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT value FROM app_settings WHERE key = 'qr_payload_mode'`
+    );
+    const mode = r.rows[0]?.value || 'url';
+    ok(res, { qrPayloadMode: mode === 'id' ? 'id' : 'url' });
+  } catch (e) { err(res, e); }
+});
+
+app.put('/api/config', async (req, res) => {
+  const { qrPayloadMode } = req.body || {};
+  if (qrPayloadMode !== 'url' && qrPayloadMode !== 'id') {
+    return res.status(400).json({ error: 'qrPayloadMode must be "url" or "id"' });
+  }
+  try {
+    await pool.query(
+      `INSERT INTO app_settings (key, value) VALUES ('qr_payload_mode', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [qrPayloadMode]
+    );
+    ok(res, { qrPayloadMode });
   } catch (e) { err(res, e); }
 });
 

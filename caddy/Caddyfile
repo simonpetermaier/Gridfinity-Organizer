@@ -1,0 +1,31 @@
+# Caddy reverse proxy in front of the Gridfinity backend.
+# Required only if you want the in-app QR scanner to work on iOS / Android —
+# camera APIs need a secure origin.
+#
+# Default mode: `tls internal`. Caddy auto-generates a cert signed by its own
+# local CA. Works immediately, but every phone needs to trust the Caddy CA
+# once (download the root from /caddy/root.crt or run `caddy trust` on the
+# host and use the printed PEM).
+#
+# Production / friendlier mode: replace the `tls internal` line with
+#   tls /certs/cert.pem /certs/key.pem
+# and drop mkcert-issued PEMs into ./caddy/certs/. README has the full
+# recipe in the "Camera & HTTPS" section.
+
+{
+    # Don't try to acquire public certs (we're on a LAN, not on the internet).
+    auto_https disable_redirects
+}
+
+:443 {
+    tls internal
+    reverse_proxy backend:3000
+
+    encode gzip zstd
+}
+
+# Plain HTTP on port 80 → 301 to HTTPS so anyone hitting the bare hostname
+# is bumped onto the secure origin (otherwise the camera API refuses).
+:80 {
+    redir https://{host}{uri} permanent
+}

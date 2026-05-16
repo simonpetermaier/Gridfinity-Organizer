@@ -96,12 +96,12 @@ Object.assign(App, {
   },
 
   _invDetail(b) {
-    const url = `${window.location.origin}/bin/${b.id}`;
+    const payload = qrPayload(b.id);
     setTimeout(() => {
       const host = document.getElementById(`detail-qr-${b.id}`);
       if (host && !host.firstChild) {
         new QRCode(host, {
-          text: url, width: 96, height: 96,
+          text: payload, width: 96, height: 96,
           colorDark: getComputedStyle(document.documentElement).getPropertyValue('--ink').trim() || '#000',
           colorLight: '#ffffff',
           correctLevel: QRCode.CorrectLevel.M,
