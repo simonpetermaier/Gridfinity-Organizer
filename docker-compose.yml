@@ -27,7 +27,7 @@ services:
       DB_NAME: gridfinity
       DB_USER: gridfinity
       DB_PASSWORD: gridfinity_pw
-      PORT: 3000
+      PORT: 3333
       # QR code payload format:
       #   url  → "https://host/bin/42"  (works in any camera app; ties stickers to host)
       #   id   → "gfbin:42"             (host-portable; only the in-app scanner decodes it)
@@ -43,7 +43,7 @@ services:
     volumes:
       - ./backups:/backups
     ports:
-      - "3000:3000"
+      - "3333:3333"
     depends_on:
       postgres:
         condition: service_healthy
