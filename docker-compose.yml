@@ -27,7 +27,11 @@ services:
       DB_NAME: gridfinity
       DB_USER: gridfinity
       DB_PASSWORD: gridfinity_pw
-      PORT: 3000
+      PORT: 3333
+      # QR code payload format:
+      #   url  → "https://host/bin/42"  (works in any camera app; ties stickers to host)
+      #   id   → "gfbin:42"             (host-portable; only the in-app scanner decodes it)
+      QR_PAYLOAD_MODE: ${QR_PAYLOAD_MODE:-url}
       # Backup / restore configuration — see backend/backup.js for details.
       BACKUP_DIR: /backups
       BACKUP_INTERVAL_DAYS: 7    # 0 disables the recurring dump
@@ -39,10 +43,46 @@ services:
     volumes:
       - ./backups:/backups
     ports:
-      - "3000:3000"
+      - "3333:3333"
     depends_on:
       postgres:
         condition: service_healthy
 
+  # ──────────────────────────────────────────────────────────────
+  # OPTIONAL — HTTPS reverse proxy.
+  #
+  # Required only if you want the in-app QR scanner (Scan tab) to
+  # work on a phone: iOS Safari / Chrome only grant camera access
+  # on secure origins.
+  #
+  # To enable:
+  #   1) Uncomment the `caddy:` block and the two `caddy_*` volumes
+  #      at the bottom of this file.
+  #   2) `docker compose up -d` — Caddy starts on :443 with a
+  #      self-signed cert (Caddy's internal CA).
+  #   3) Visit https://<host-ip>/ on your phone and accept the
+  #      cert warning the first time, OR install Caddy's root CA
+  #      for a warning-free experience.
+  #
+  # See README "Camera & HTTPS" for the mkcert recipe and the
+  # Tailscale alternative (zero-config HTTPS over your tailnet).
+  # ──────────────────────────────────────────────────────────────
+  # caddy:
+  #   image: caddy:2-alpine
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - ./caddy/certs:/certs:ro
+  #     - caddy_data:/data
+  #     - caddy_config:/config
+  #   depends_on:
+  #     - backend
+
 volumes:
   postgres_data:
+  # Uncomment alongside the `caddy:` service above.
+  # caddy_data:
+  # caddy_config:

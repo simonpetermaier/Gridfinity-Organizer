@@ -1,0 +1,5 @@
+# Generated certs (mkcert / tailscale cert) live here — never commit them.
+certs/*.pem
+certs/*.crt
+certs/*.key
+!certs/.gitkeep

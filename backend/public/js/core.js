@@ -41,7 +41,8 @@ const api = {
 // STATE
 // ═══════════════════════════════════════════════════════════════
 const S = {
-  tab:           'inventory',   // inventory | locations | box-types | content-types | search
+  tab:           'inventory',   // inventory | locations | box-types | content-types | search | scanner
+  qrPayloadMode: 'url',         // 'url' = host-coupled URL · 'id' = host-portable gfbin:N
   theme:         'light',       // light | dark — kept in sync with <html data-theme>
   selectedBinId: null,          // for the inventory split view
   locations:     [],
@@ -53,6 +54,7 @@ const S = {
   ctFilter:      'all',         // all | inuse  — content-types view
   searchQ:       '',
   searchResults: [],
+  formItems:     [],            // draft items inside the bin form modal
   // grid picker state (shared for add/edit bin modals)
   grid: {
     locId:      null,
@@ -94,6 +96,26 @@ function hueClass(name) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// BIN HELPERS — bins now hold a list of items. These shape the
+// data for short-label rendering (tooltips, mini cells, etc.).
+// ═══════════════════════════════════════════════════════════════
+function binSummary(b) {
+  const items = b?.items || [];
+  if (!items.length) return '— empty —';
+  if (items.length === 1) {
+    const it = items[0];
+    return it.attribute || it.content_type || '— untagged —';
+  }
+  // Multi-item — show "Bolt, Nut" or "Bolt + 2 more".
+  const names = items.map(i => i.attribute || i.content_type || '·').filter(Boolean);
+  return names.length <= 3 ? names.join(', ') : `${names[0]} + ${names.length - 1} more`;
+}
+function binPrimaryContentType(b) {
+  const items = b?.items || [];
+  return items[0]?.content_type || null;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // ICONS — sprite-based. Sprite is fetched once in App.init() and
 // injected into <body>; afterwards `<use href="#icon-X"/>` resolves
 // synchronously from the DOM. Stroke color follows currentColor.
@@ -119,4 +141,36 @@ async function injectIconSprite() {
 // containing element (e.g. a button class).
 function icon(name, size = 16) {
   return `<svg class="icon" width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-${name}"/></svg>`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// QR PAYLOAD — what string we encode in printed labels.
+//   'url'  → "https://host/bin/42"  (works in iOS Camera app,
+//            but the host name lives forever on the sticker)
+//   'id'   → "gfbin:42"             (host-portable; only the
+//            in-app scanner can decode this — see views/scanner.js)
+// The mode is set server-side via the QR_PAYLOAD_MODE env var and
+// fetched once at boot into S.qrPayloadMode.
+// ═══════════════════════════════════════════════════════════════
+function qrPayload(id) {
+  return S.qrPayloadMode === 'id'
+    ? `gfbin:${id}`
+    : `${window.location.origin}/bin/${id}`;
+}
+
+// Inverse of qrPayload(): given anything a scanner found, extract a
+// bin id we can navigate to on the current origin. Returns null if
+// the payload doesn't look like one of ours.
+function parseScannedPayload(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  // Host-portable form
+  let m = s.match(/^gfbin:(\d+)$/i);
+  if (m) return parseInt(m[1], 10);
+  // Fully-qualified URL form, any host
+  m = s.match(/\/bin\/(\d+)\/?$/);
+  if (m) return parseInt(m[1], 10);
+  // Bare numeric (someone tested by encoding just the ID)
+  if (/^\d+$/.test(s)) return parseInt(s, 10);
+  return null;
 }

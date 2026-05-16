@@ -3,8 +3,13 @@
 Object.assign(App, {
 
   renderContentTypes() {
+    // Count item-occurrences (a divided bin with Bolt+Nut adds 1 each).
     const usage = {};
-    for (const b of S.bins) if (b.content_type) usage[b.content_type] = (usage[b.content_type] || 0) + 1;
+    for (const b of S.bins) {
+      for (const it of (b.items || [])) {
+        if (it.content_type) usage[it.content_type] = (usage[it.content_type] || 0) + 1;
+      }
+    }
     const inUseCount = S.contentTypes.filter(ct => usage[ct.name]).length;
     const maxUsage = Math.max(1, ...Object.values(usage));
     const filterAll = !S.ctFilter || S.ctFilter === 'all';
@@ -85,7 +90,7 @@ Object.assign(App, {
 
   async deleteContentType(id) {
     const ct = S.contentTypes.find(c => c.id === id);
-    const inUse = S.bins.filter(b => b.content_type === ct.name).length;
+    const inUse = S.bins.reduce((n, b) => n + (b.items || []).filter(it => it.content_type === ct.name).length, 0);
     const msg = inUse
       ? `Delete "${ct.name}"?\n${inUse} bin(s) currently use this tag — they will lose it (their content type becomes empty).`
       : `Delete "${ct.name}"?`;

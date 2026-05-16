@@ -2,32 +2,99 @@
 
 Object.assign(App, {
 
+  // ── Items editor inside the bin form ─────────────────────────
+  // S.formItems is the draft list while the modal is open.
+  _binCapacity(boxTypeId) {
+    if (!boxTypeId) return 1;
+    const bt = S.boxTypes.find(b => String(b.id) === String(boxTypeId));
+    if (!bt) return 1;
+    return bt.is_divided ? Math.max(1, bt.compartments || 1) : 1;
+  },
+
+  _itemRowHTML(it, idx) {
+    return `
+      <div class="item-row" data-idx="${idx}">
+        <div class="item-row-slot">${idx + 1}</div>
+        <div class="item-row-fields">
+          <input class="input item-ctype" list="ctype-dl"
+                 value="${esc(it.content_type || '')}" placeholder="content type"
+                 oninput="App._onItemInput(${idx}, 'content_type', this.value)">
+          <input class="input item-attr"
+                 value="${esc(it.attribute || '')}" placeholder="attribute (M5×30, JST 2.54mm…)"
+                 oninput="App._onItemInput(${idx}, 'attribute', this.value)">
+        </div>
+        <input class="input item-notes"
+               value="${esc(it.notes || '')}" placeholder="notes (optional)"
+               oninput="App._onItemInput(${idx}, 'notes', this.value)">
+        <button type="button" class="icon-btn" title="Remove item"
+                onclick="App._removeItem(${idx})">${icon('trash', 16)}</button>
+      </div>`;
+  },
+
+  _renderItemsEditor() {
+    const area = $('items-area');
+    if (!area) return;
+    const cap = this._binCapacity($('f-btype')?.value);
+    const items = S.formItems;
+    const headerLabel = cap === 1
+      ? 'Contents'
+      : `Items (${items.length}/${cap})`;
+    const helper = cap === 1
+      ? 'Undivided box — exactly one item.'
+      : `This divided box holds up to ${cap} item${cap === 1 ? '' : 's'}, one per compartment.`;
+    area.innerHTML = `
+      <div style="display:flex; align-items:baseline; gap:8px; margin-bottom:6px;">
+        <label class="field-label" style="margin:0;">${esc(headerLabel)}</label>
+        <span class="mute" style="font-size:var(--text-xs);">${esc(helper)}</span>
+      </div>
+      <datalist id="ctype-dl">
+        ${S.contentTypes.map(ct => `<option value="${esc(ct.name)}">`).join('')}
+      </datalist>
+      <div class="items-list">
+        ${items.length
+          ? items.map((it, i) => this._itemRowHTML(it, i)).join('')
+          : '<p class="mute" style="font-size:var(--text-xs); font-style:italic;">No items yet.</p>'}
+      </div>
+      ${items.length < cap
+        ? `<button type="button" class="btn btn-secondary sm" style="margin-top:8px;"
+             onclick="App._addItem()">${icon('plus', 12)} Add item</button>`
+        : ''}`;
+  },
+
+  _onItemInput(idx, field, value) {
+    if (!S.formItems[idx]) return;
+    S.formItems[idx][field] = value;
+    // Update counter without thrashing the whole list (would lose focus).
+    const cap = this._binCapacity($('f-btype')?.value);
+    const area = $('items-area');
+    const labelNode = area?.querySelector('label.field-label');
+    if (labelNode && cap > 1) labelNode.textContent = `Items (${S.formItems.length}/${cap})`;
+  },
+
+  _addItem() {
+    const cap = this._binCapacity($('f-btype')?.value);
+    if (S.formItems.length >= cap) return;
+    S.formItems.push({ content_type: '', attribute: '', notes: '' });
+    this._renderItemsEditor();
+  },
+
+  _removeItem(idx) {
+    S.formItems.splice(idx, 1);
+    this._renderItemsEditor();
+  },
+
   _binFormHTML(bin = {}) {
     return `
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
-        <div>
-          <label class="field-label">Content type</label>
-          <input class="input" id="f-ctype" value="${esc(bin.content_type || '')}" list="ctype-dl"
-            placeholder="bolt, connector, tool…">
-          <datalist id="ctype-dl">
-            ${S.contentTypes.map(ct => `<option value="${esc(ct.name)}">`).join('')}
-          </datalist>
-        </div>
-        <div>
-          <label class="field-label">Attribute</label>
-          <input class="input" id="f-attr" value="${esc(bin.attribute || '')}" placeholder="M5×30, JST 2.54 mm…">
-        </div>
-      </div>
-
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px;">
         <div>
           <label class="field-label">Box type</label>
           <select class="select" id="f-btype" onchange="App.onBinBtChange()">
             <option value="">— None —</option>
             ${S.boxTypes.map(bt => `<option value="${bt.id}"
               ${String(bt.id) === String(bin.box_type_id) ? 'selected' : ''}
-              data-w="${bt.grid_width}" data-l="${bt.grid_length}" data-h="${bt.grid_height_u}">
-              ${esc(bt.name)} (${bt.grid_width}×${bt.grid_length}×${bt.grid_height_u}U)
+              data-w="${bt.grid_width}" data-l="${bt.grid_length}" data-h="${bt.grid_height_u}"
+              data-divided="${bt.is_divided ? '1' : '0'}" data-comp="${bt.compartments || 1}">
+              ${esc(bt.name)} (${bt.grid_width}×${bt.grid_length}×${bt.grid_height_u}U${bt.is_divided ? ', ' + bt.compartments + ' comp' : ''})
             </option>`).join('')}
           </select>
         </div>
@@ -37,10 +104,7 @@ Object.assign(App, {
         </div>
       </div>
 
-      <div style="margin-top:16px;">
-        <label class="field-label">Notes</label>
-        <textarea class="input" id="f-notes" rows="2">${esc(bin.notes || '')}</textarea>
-      </div>
+      <div id="items-area" style="margin-top:16px;"></div>
 
       <div style="margin-top:16px;">
         <label class="field-label">Drawer location</label>
@@ -59,7 +123,9 @@ Object.assign(App, {
 
   showAddBin() {
     S.grid = { locId: null, locData: null, drawerBins: [], selX: null, selY: null, bw: 1, bl: 1, editId: null };
+    S.formItems = [{ content_type: '', attribute: '', notes: '' }];
     this.openModal('Add Bin', this._binFormHTML());
+    this._renderItemsEditor();
   },
 
   showEditBin(id) {
@@ -70,7 +136,15 @@ Object.assign(App, {
       bw: b.grid_width || 1, bl: b.grid_length || 1,
       editId: id,
     };
+    // Clone items so edits in the form don't mutate S.bins until save.
+    S.formItems = (b.items || []).map(it => ({
+      content_type: it.content_type || '',
+      attribute:    it.attribute    || '',
+      notes:        it.notes        || '',
+    }));
+    if (S.formItems.length === 0) S.formItems.push({ content_type: '', attribute: '', notes: '' });
     this.openModal('Edit Bin #' + id, this._binFormHTML(b));
+    this._renderItemsEditor();
     if (b.location_id) this.onBinLocChange();
   },
 
@@ -82,6 +156,12 @@ Object.assign(App, {
       S.grid.bl = parseInt(opt.dataset.l) || 1;
       $('f-hu').value = opt.dataset.h || 3;
     } else { S.grid.bw = 1; S.grid.bl = 1; }
+    // Trim formItems if the new box type has fewer compartments than
+    // we currently have rows for.
+    const cap = this._binCapacity(opt.value);
+    if (S.formItems.length > cap) S.formItems.length = cap;
+    if (S.formItems.length === 0) S.formItems.push({ content_type: '', attribute: '', notes: '' });
+    this._renderItemsEditor();
     this._renderGridPicker();
   },
 
@@ -138,12 +218,12 @@ Object.assign(App, {
         let inner = '';
         if (occupier && !selected) {
           cls += ' occ';
-          inner = `<span class="bin-lbl">#${occupier.id} ${esc(occupier.attribute || occupier.content_type || '')}</span>`;
+          inner = `<span class="bin-lbl">#${occupier.id} ${esc(binSummary(occupier))}</span>`;
         } else if (selected) {
           cls += occupier ? ' conflict' : ' sel';
         }
         cells += `<td class="${cls}" onclick="App._gridClick(${c},${r})"
-          title="(col ${c}, row ${r})${occupier ? ' · #' + occupier.id + ' ' + (occupier.attribute || '') : ''}">${inner}</td>`;
+          title="(col ${c}, row ${r})${occupier ? ' · #' + occupier.id + ' ' + binSummary(occupier) : ''}">${inner}</td>`;
       }
       tableRows += `<tr>${cells}</tr>`;
     }
@@ -205,17 +285,30 @@ Object.assign(App, {
           }
     }
 
+    // Drop empty trailing item rows the user added but never filled.
+    const items = (S.formItems || [])
+      .map(it => ({
+        content_type: (it.content_type || '').trim(),
+        attribute:    (it.attribute    || '').trim(),
+        notes:        (it.notes        || '').trim(),
+      }))
+      .filter(it => it.content_type || it.attribute || it.notes);
+
+    const cap = this._binCapacity(btId);
+    if (items.length > cap) {
+      alert(`This box type allows at most ${cap} item${cap === 1 ? '' : 's'} (got ${items.length})`);
+      return;
+    }
+
     const data = {
-      location_id:  locId ? parseInt(locId) : null,
-      grid_x:       g.selX,
-      grid_y:       g.selY,
-      grid_width:   g.bw,
-      grid_length:  g.bl,
-      height_u:     parseInt($('f-hu').value) || 3,
-      box_type_id:  btId ? parseInt(btId) : null,
-      content_type: $('f-ctype').value.trim(),
-      attribute:    $('f-attr').value.trim(),
-      notes:        $('f-notes').value.trim(),
+      location_id: locId ? parseInt(locId) : null,
+      grid_x:      g.selX,
+      grid_y:      g.selY,
+      grid_width:  g.bw,
+      grid_length: g.bl,
+      height_u:    parseInt($('f-hu').value) || 3,
+      box_type_id: btId ? parseInt(btId) : null,
+      items,
     };
     try {
       let saved;

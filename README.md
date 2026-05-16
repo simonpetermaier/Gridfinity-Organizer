@@ -8,13 +8,15 @@ A self-hosted web app for cataloguing the contents of your [Gridfinity](https://
 
 ## Highlights
 
-- 📦 **Inventory split view** — list every bin, click for a detail card with its QR, location, and box type.
+- 📦 **Inventory split view** — one row per item, with a detail card showing every item in the selected container.
+- 🧩 **Multi-item divided bins** — a 2-compartment box holds two distinct items, a 4-comp box holds four, and so on. Undivided boxes are capped at one.
 - 🗄️ **Visual drawers** — each cabinet shows mini-maps of its drawers with bins drawn in their actual positions.
 - 📐 **Box-type gallery** — vector previews of every Gridfinity footprint you have, divided bins included.
-- 🏷️ **Editable content tags** — rename "Bolt" → "Bolts" and every bin that uses it updates in one transaction.
+- 🏷️ **Editable content tags** — rename "Bolt" → "Bolts" and every item that uses it updates instantly.
 - 🎨 **Multi-color taxonomy** — each tag picks one of four palette colors so the drawer map turns into a glanceable heat-map.
-- 🔍 **Search palette** — type to find bins by content, attribute, cabinet, drawer, or notes.
-- 📱 **Scan a QR → mobile detail page** — print the code, stick it on the bin, point your phone at it.
+- 🔍 **Search palette** — type to find any item by content, attribute, cabinet, drawer, or notes.
+- 📷 **In-app QR scanner** — open the **Scan** tab on your phone, point at a sticker, jump straight to the bin.
+- 📱 **Scan a QR → mobile detail page** — print the code, stick it on the bin, the public detail page lists everything inside.
 - 🌓 **Light & dark themes** — clay-and-paper or VS Code-style. Respects `prefers-color-scheme`.
 - 📲 **Mobile layout** — narrow viewports get a bottom nav, a full-width search bar, and edge-to-edge cards. Desktop is untouched.
 - 💾 **Built-in backups** — automatic `pg_dump` on every restart and on a schedule, with a one-shot restore flag.
@@ -84,12 +86,14 @@ backend:
 1. Click **+ Drawer** (top-right of the **Drawers** tab) and describe a real drawer — its cabinet, name, grid dimensions, and how tall stacks can go.
 2. Switch to **Box Types** and either pick one of the seeded shapes or add your own (e.g. `1×2×3`, `1×4 Div×3`).
 3. Back on **Inventory**, click **+ Bin**:
-   - Pick a content type (or type a new one — the catalog will pick it up).
-   - Enter the *attribute* — the specific thing inside: `M5×30`, `JST 2.54 mm`, etc.
-   - Choose the box type and the drawer.
+   - Pick a **box type**. Undivided types lock the form to one item; divided types unlock an `Items (N/cap)` editor where you can hit *Add item* up to `cap` times — one row per compartment.
+   - For each item, pick a *content type* (or type a new one — the catalog will pick it up) and write the *attribute* — the specific thing inside: `M5×30`, `JST 2.54 mm`, etc. Notes are optional.
+   - Choose the drawer.
    - In the grid picker, click the top-left corner where the bin sits. The footprint highlights green.
    - **↻ Rotate** swaps width and length for non-square bins.
-4. Save. The bin gets a numeric ID (`#1`, `#2`, …) and shows up in the list.
+4. Save. The bin gets a numeric ID (`#1`, `#2`, …) and shows up in the list. A divided bin's items appear as separate rows tagged `#1·A`, `#1·B`, … so you can tell which compartment holds what.
+
+> ✋ **Capacity is enforced server-side.** Trying to save more items than a box type's `compartments` value returns an error — switch to a divided box type with the right compartment count first.
 
 ### Printing the QR
 
@@ -102,6 +106,88 @@ The **Content Types** tab is the source of truth for tag names. Editing a tag's 
 ### Switching themes
 
 Use the **☀️/🌙** toggle in the sidebar (or its mobile counterpart). The choice is saved to `localStorage`; first visits pick up your OS-level dark mode preference automatically.
+
+---
+
+## Host-portable QR codes
+
+Printed stickers can outlive your host setup. The backend supports two QR payload formats; the in-app scanner reads either.
+
+| `QR_PAYLOAD_MODE` | Payload encoded | Native iOS Camera app | Scanner-only |
+|---|---|---|---|
+| `url` *(default)* | `https://host/bin/42` | ✅ | — |
+| `id` | `gfbin:42` | ❌ | ✅ |
+
+If you're going to print stickers once and never reprint, switch to `id` mode. The codes won't know your host name and stay valid through every server move.
+
+**Flip it from the UI** (recommended): open the **Scan** tab and toggle between `URL` and `gfbin:N` in the page header. The choice is persisted in Postgres (table `app_settings`) and takes effect on the next QR you render — no restart.
+
+The `QR_PAYLOAD_MODE` env var only **seeds the initial value** on a fresh database. After that the UI toggle wins; changing the env var doesn't override what's in the DB. For unattended provisioning you can pre-seed the value:
+
+```yaml
+# docker-compose.yml — only used on a fresh DB
+backend:
+  environment:
+    QR_PAYLOAD_MODE: id
+```
+
+Scan codes from any mode with the **Scan** tab in the sidebar. The scanner accepts both `gfbin:N` and full `…/bin/N` URLs, so old stickers keep working when you switch.
+
+---
+
+## Camera & HTTPS
+
+The in-app scanner uses the browser's `getUserMedia` API. **Modern browsers — iOS Safari especially — only allow camera access on a secure origin (HTTPS, or `localhost`).** Plain HTTP on a LAN IP will never trigger the camera prompt. This is a security boundary, not a misconfiguration you can flag-away.
+
+Two pragmatic paths to add HTTPS:
+
+### A. Caddy reverse proxy on the LAN (recommended)
+
+A small `caddy` service block is included in `docker-compose.yml` — commented out by default. To enable:
+
+1. Uncomment the `caddy:` service and the two `caddy_*` lines in the `volumes:` section.
+2. `docker compose up -d`. Caddy starts on `:443` using its built-in CA (`tls internal`).
+3. Visit `https://<host-ip>/` on your phone and accept the cert warning **once**. The scanner now works.
+
+Want no warnings? Either:
+
+- **mkcert** (LAN-trusted certs):
+  ```bash
+  brew install mkcert nss              # macOS — Linux is `apt`/`dnf`
+  mkcert -install                      # adds the mkcert root CA to your trust store
+  cd caddy
+  mkcert -cert-file certs/cert.pem -key-file certs/key.pem \
+         gridfinity.local 192.168.1.50  # adjust to your host's name/IP
+  # Edit caddy/Caddyfile: replace `tls internal` with
+  #   tls /certs/cert.pem /certs/key.pem
+  docker compose restart caddy
+  ```
+  Install the mkcert root CA on every phone you scan from (one-time; instructions in the [mkcert README](https://github.com/FiloSottile/mkcert#installation)).
+
+- **Caddy's root CA** (no extra tooling):
+  ```bash
+  docker compose exec caddy caddy trust-pem
+  # → prints PEM. Save as `caddy-root.crt`, email it to yourself,
+  #   open on iPhone, Settings → General → Profile → install.
+  ```
+
+### B. Tailscale Magic DNS + HTTPS (cleanest if you already use Tailscale)
+
+Tailscale gives every machine on your tailnet a real Let's Encrypt cert:
+
+1. Install Tailscale on the Docker host, enable HTTPS in the admin console.
+2. Run `tailscale cert <hostname>.<tailnet>.ts.net` on the host — drops `cert.pem` + `key.pem` in the working directory.
+3. Copy them into `./caddy/certs/`, edit the Caddyfile to use them (as in mkcert step), restart Caddy.
+4. Scan QRs from any phone on your tailnet via the `https://hostname.tailnet.ts.net` URL — no cert warnings, no root CA install.
+
+### Trade-offs at a glance
+
+| Approach | Setup time | Cert warnings | Where it works |
+|---|---|---|---|
+| Plain HTTP | 0 min | — | Anywhere, but **no scanner** |
+| Caddy + `tls internal` | 2 min | First-visit warning per device | Anywhere on the LAN |
+| Caddy + mkcert | 10 min | None (after root install) | Anywhere on the LAN |
+| Caddy + Tailscale cert | 15 min | None | Anywhere on the tailnet |
 
 ---
 

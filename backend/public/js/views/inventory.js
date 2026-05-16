@@ -3,22 +3,43 @@
 Object.assign(App, {
 
   renderInventory() {
-    const filtered = this.filteredBins();
-    if (S.selectedBinId && !filtered.find(b => b.id === S.selectedBinId)) S.selectedBinId = null;
-    if (!S.selectedBinId && filtered.length) S.selectedBinId = filtered[0].id;
-    const sel = filtered.find(b => b.id === S.selectedBinId);
+    const filteredBins = this.filteredBins();
+    // Auto-select the first visible bin so the detail pane is never empty
+    // when there's data.
+    if (S.selectedBinId && !filteredBins.find(b => b.id === S.selectedBinId)) S.selectedBinId = null;
+    if (!S.selectedBinId && filteredBins.length) S.selectedBinId = filteredBins[0].id;
+    const sel = filteredBins.find(b => b.id === S.selectedBinId);
 
-    const usedCabinets = [...new Set(S.locations.map(l => l.cabinet_id))].filter(Boolean);
-    const usedTypes    = [...new Set(S.bins.map(b => b.content_type).filter(Boolean))].sort();
+    // Explode bins into (bin, item) pairs, then optionally narrow by
+    // typeFilter on the item's content_type. Bins with no items still get
+    // one placeholder row so empty containers stay discoverable — unless
+    // a typeFilter is active, in which case they're irrelevant.
+    const rows = [];
+    for (const b of filteredBins) {
+      const items = b.items || [];
+      if (items.length === 0) {
+        if (!S.typeFilter) rows.push({ b, item: null });
+      } else {
+        for (const item of items) {
+          if (S.typeFilter && item.content_type !== S.typeFilter) continue;
+          rows.push({ b, item });
+        }
+      }
+    }
+
+    const usedTypes = [...new Set(
+      S.bins.flatMap(b => (b.items || []).map(i => i.content_type)).filter(Boolean)
+    )].sort();
+    const totalItems = S.bins.reduce((n, b) => n + (b.items?.length || 0), 0);
 
     return `
       <div class="page-header">
         <h1 class="page-title">Inventory</h1>
-        <span class="count-chip">${filtered.length} / ${S.bins.length} bins</span>
+        <span class="count-chip">${rows.length} item${rows.length === 1 ? '' : 's'} · ${S.bins.length} bin${S.bins.length === 1 ? '' : 's'} (${totalItems} total)</span>
       </div>
 
       <div class="filters">
-        ${this._locFilterChips(usedCabinets)}
+        ${this._locFilterChips()}
         ${this._typeFilterChips(usedTypes)}
         ${S.locFilter || S.typeFilter ? `<button class="btn btn-ghost sm" onclick="S.locFilter='';S.typeFilter='';App.render()">Clear</button>` : ''}
       </div>
@@ -32,8 +53,8 @@ Object.assign(App, {
             <div>Location</div>
             <div></div>
           </div>
-          ${filtered.length ? filtered.map(b => this._invRow(b)).join('') :
-            `<div class="inv-row empty">No bins match the current filters.</div>`}
+          ${rows.length ? rows.map(r => this._invRow(r.b, r.item)).join('') :
+            `<div class="inv-row empty">No items match the current filters.</div>`}
         </div>
 
         <div class="card inv-detail">
@@ -46,17 +67,13 @@ Object.assign(App, {
   filteredBins() {
     let bins = S.bins;
     if (S.locFilter)  bins = bins.filter(b => String(b.location_id) === String(S.locFilter));
-    if (S.typeFilter) bins = bins.filter(b => b.content_type === S.typeFilter);
+    if (S.typeFilter) bins = bins.filter(b => (b.items || []).some(i => i.content_type === S.typeFilter));
     return bins;
   },
 
   _selectBin(id) { S.selectedBinId = id; this.render(); },
 
-  _locFilterChips(cabinets) {
-    if (!S.locations.length) return '';
-    const locsByCab = {};
-    for (const l of S.locations) (locsByCab[l.cabinet_id] = locsByCab[l.cabinet_id] || []).push(l);
-    // Render a chip per location with its short id
+  _locFilterChips() {
     return S.locations.map(l => {
       const active = String(S.locFilter) === String(l.id);
       return `<button class="pill ${active ? 'active' : ''}"
@@ -74,20 +91,32 @@ Object.assign(App, {
       </button>`).join('');
   },
 
-  _invRow(b) {
+  // Slot letter for divided bins (A, B, C, …). Returns '' for undivided.
+  _slotLabel(b, slot) {
+    return b.is_divided ? String.fromCharCode(65 + (slot || 0)) : '';
+  },
+
+  _invRow(b, item) {
     const selected = b.id === S.selectedBinId;
     const loc = b.cabinet_id ? `${esc(b.cabinet_id).slice(-1)}·${esc(b.drawer_id).replace(/[^0-9]/g,'') || ''}` : '—';
     const pos = b.grid_x != null ? `<span class="mono mute" style="font-size:var(--text-xs);">(${b.grid_x},${b.grid_y})</span>` : '';
-    const hue = hueClass(b.content_type);
+    const slotLetter = item ? this._slotLabel(b, item.slot) : '';
+    const idLabel = slotLetter ? `#${b.id}·${slotLetter}` : `#${b.id}`;
+    const ctype = item?.content_type || '';
+    const attr  = item?.attribute || '';
+    const hue   = hueClass(ctype);
+    const typeText = item
+      ? (ctype || '—')
+      : '<span class="mute">— empty —</span>';
     return `
       <div class="inv-row ${selected ? 'selected' : ''}" onclick="App._selectBin(${b.id})">
-        <div class="bin-id mono">#${b.id}</div>
+        <div class="bin-id mono">${idLabel}</div>
         <div class="two-line">
           <div class="top" style="display:flex; align-items:center; gap:6px;">
             ${hue ? `<span class="hue-dot ${hue}"></span>` : ''}
-            <span>${esc(b.content_type || '—')}</span>
+            <span>${typeText}</span>
           </div>
-          <div class="bot">${esc(b.attribute || '')}</div>
+          <div class="bot">${esc(attr)}</div>
         </div>
         <div class="mono mute" style="font-size:var(--text-xs);">${esc(b.box_type_name || '—')}</div>
         <div class="mono" style="font-size:var(--text-xs);">${loc} ${pos}</div>
@@ -96,38 +125,63 @@ Object.assign(App, {
   },
 
   _invDetail(b) {
-    const url = `${window.location.origin}/bin/${b.id}`;
+    const payload = qrPayload(b.id);
     setTimeout(() => {
       const host = document.getElementById(`detail-qr-${b.id}`);
       if (host && !host.firstChild) {
         new QRCode(host, {
-          text: url, width: 96, height: 96,
+          text: payload, width: 96, height: 96,
           colorDark: getComputedStyle(document.documentElement).getPropertyValue('--ink').trim() || '#000',
           colorLight: '#ffffff',
           correctLevel: QRCode.CorrectLevel.M,
         });
       }
     }, 0);
+
+    const items = b.items || [];
+    const capacity = b.is_divided ? (b.compartments || 1) : 1;
+    const capacityLine = b.is_divided
+      ? `<div class="mute" style="font-size:var(--text-xs); margin-top:6px;">Divided box · ${items.length}/${capacity} compartments used</div>`
+      : '';
+
+    const itemsHtml = items.length
+      ? `<div style="display:flex; flex-direction:column; gap:10px; margin-top:8px;">
+           ${items.map(it => {
+             const slot = this._slotLabel(b, it.slot);
+             const hue = hueClass(it.content_type);
+             return `
+               <div class="card" style="padding:10px 12px; background:var(--bg);">
+                 <div style="display:flex; align-items:center; gap:8px;">
+                   ${slot ? `<span class="bin-id mono" title="Compartment">${slot}</span>` : ''}
+                   ${it.content_type ? `<span class="pill accent ${hue}">${esc(it.content_type)}</span>` : '<span class="mute" style="font-size:var(--text-xs);">no tag</span>'}
+                 </div>
+                 ${it.attribute ? `<div class="mono" style="margin-top:6px; font-size:var(--text-md); font-weight:600;">${esc(it.attribute)}</div>` : ''}
+                 ${it.notes ? `<div class="mute" style="font-size:var(--text-xs); margin-top:4px;">${esc(it.notes)}</div>` : ''}
+               </div>`;
+           }).join('')}
+         </div>`
+      : `<div class="mute" style="margin-top:8px; font-style:italic; font-size:var(--text-sm);">No items yet — click <strong>Edit</strong> to add some.</div>`;
+
     return `
       <div style="display:flex; align-items:flex-start; gap:12px;">
         <div class="id-chip">#${b.id}</div>
         <div style="flex:1; min-width:0;">
           <div class="caps">Contents</div>
-          <div class="contents">${esc(b.attribute || '—')}</div>
-          ${b.content_type ? `<div style="margin-top:6px;"><span class="pill accent ${hueClass(b.content_type)}">${esc(b.content_type)}</span></div>` : ''}
+          <div class="mono" style="font-size:var(--text-md); font-weight:600;">${items.length} item${items.length === 1 ? '' : 's'}</div>
+          ${capacityLine}
         </div>
         <button class="icon-btn" title="Edit" onclick="App.showEditBin(${b.id})">${icon('pencil', 16)}</button>
         <button class="icon-btn" title="Delete" onclick="App.deleteBin(${b.id})">${icon('trash', 16)}</button>
       </div>
 
-      <div class="meta-grid">
+      ${itemsHtml}
+
+      <div class="meta-grid" style="margin-top:16px;">
         <div><div class="label">Cabinet</div><div>${esc(b.cabinet_id || '—')}</div></div>
         <div><div class="label">Drawer</div><div>${esc(b.drawer_id || '—')}</div></div>
         <div><div class="label">Position</div><div class="mono">${b.grid_x != null ? `(${b.grid_x}, ${b.grid_y})` : '—'}</div></div>
         <div><div class="label">Box</div><div class="mono">${esc(b.box_type_name || '—')} · ${b.grid_width}×${b.grid_length} · ${b.height_u}U</div></div>
       </div>
-
-      ${b.notes ? `<div style="margin-top:12px;"><div class="label" style="margin-bottom:4px;">Notes</div><div style="font-size:var(--text-sm);">${esc(b.notes)}</div></div>` : ''}
 
       <div class="qr-row">
         <div id="detail-qr-${b.id}" style="background:#fff; padding:6px; border-radius:var(--radius-md);"></div>

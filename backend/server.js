@@ -28,6 +28,25 @@ function notFound(res)  { res.status(404).json({ error: 'Not found' }); }
 // volume). Creates new tables if missing and seeds them only when empty —
 // user deletions are preserved across restarts.
 async function ensureSchema() {
+  // Key/value store for runtime-mutable settings. Currently just qr_payload_mode
+  // but a stable home for future flags (theme defaults, retention overrides, …).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key   VARCHAR(64) PRIMARY KEY,
+      value TEXT
+    )
+  `);
+  // Seed qr_payload_mode from the env var on first boot only. After that the
+  // DB row wins — changing QR_PAYLOAD_MODE in compose doesn't override the
+  // user's choice from the UI.
+  const envMode = (process.env.QR_PAYLOAD_MODE || 'url').toLowerCase();
+  const seedMode = envMode === 'id' ? 'id' : 'url';
+  await pool.query(
+    `INSERT INTO app_settings (key, value) VALUES ('qr_payload_mode', $1)
+       ON CONFLICT (key) DO NOTHING`,
+    [seedMode]
+  );
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS content_types (
       id   SERIAL PRIMARY KEY,
@@ -85,6 +104,58 @@ async function ensureSchema() {
       client.release();
     }
   }
+
+  // ── bin_items table ───────────────────────────────────────────
+  // A divided box can hold up to `box_types.compartments` items;
+  // undivided boxes hold exactly one. Each item gets its own row.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bin_items (
+      id              SERIAL PRIMARY KEY,
+      bin_id          INT NOT NULL REFERENCES bins(id) ON DELETE CASCADE,
+      slot            INT NOT NULL,
+      content_type_id INT REFERENCES content_types(id) ON DELETE SET NULL,
+      attribute       VARCHAR(255),
+      notes           TEXT,
+      updated_at      TIMESTAMP DEFAULT NOW(),
+      UNIQUE(bin_id, slot)
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_bin_items_bin ON bin_items(bin_id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_bin_items_content_type ON bin_items(content_type_id)`);
+
+  // One-shot: move legacy bins.{content_type_id,attribute,notes} into
+  // bin_items (slot 0), then drop the columns. Guarded by presence of
+  // the legacy column so it never runs twice.
+  const itemCols = await pool.query(`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_name = 'bins' AND column_name IN ('content_type_id', 'attribute', 'notes')
+  `);
+  if (itemCols.rows.length > 0) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`
+        INSERT INTO bin_items (bin_id, slot, content_type_id, attribute, notes, updated_at)
+        SELECT id, 0, content_type_id, attribute, notes, COALESCE(updated_at, NOW())
+        FROM bins
+        WHERE content_type_id IS NOT NULL
+           OR (attribute IS NOT NULL AND attribute <> '')
+           OR (notes IS NOT NULL AND notes <> '')
+        ON CONFLICT DO NOTHING
+      `);
+      await client.query(`DROP INDEX IF EXISTS idx_bins_content_type_id`);
+      await client.query(`ALTER TABLE bins DROP COLUMN IF EXISTS content_type_id`);
+      await client.query(`ALTER TABLE bins DROP COLUMN IF EXISTS attribute`);
+      await client.query(`ALTER TABLE bins DROP COLUMN IF EXISTS notes`);
+      await client.query('COMMIT');
+      console.log('Migrated bins.{content_type_id,attribute,notes} → bin_items');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
 }
 
 // Resolve a free-form content_type string to a content_types.id.
@@ -103,6 +174,61 @@ async function resolveContentTypeId(client, raw) {
   );
   return inserted.rows[0].id;
 }
+
+// Cap on how many bin_items a bin may hold. Undivided / unknown box
+// types are treated as single-compartment.
+async function getCapacity(client, boxTypeId) {
+  if (!boxTypeId) return 1;
+  const r = await client.query(
+    'SELECT is_divided, compartments FROM box_types WHERE id = $1',
+    [boxTypeId]
+  );
+  if (!r.rows.length) return 1;
+  return r.rows[0].is_divided ? Math.max(1, r.rows[0].compartments || 1) : 1;
+}
+
+// Replace the items list for a bin in a single transaction step.
+// The caller is responsible for the surrounding BEGIN/COMMIT.
+async function replaceBinItems(client, binId, items, capacity) {
+  const trimmed = (items || [])
+    .map(it => ({
+      content_type: (it.content_type || '').trim(),
+      attribute:    (it.attribute    || '').trim(),
+      notes:        (it.notes        || '').trim(),
+    }))
+    // Drop entirely empty entries — the user may have submitted a form
+    // with an empty trailing row.
+    .filter(it => it.content_type || it.attribute || it.notes);
+  if (trimmed.length > capacity) {
+    throw new Error(`This box type allows at most ${capacity} item${capacity === 1 ? '' : 's'} (got ${trimmed.length})`);
+  }
+  await client.query('DELETE FROM bin_items WHERE bin_id = $1', [binId]);
+  for (let i = 0; i < trimmed.length; i++) {
+    const ctId = await resolveContentTypeId(client, trimmed[i].content_type);
+    await client.query(
+      `INSERT INTO bin_items (bin_id, slot, content_type_id, attribute, notes)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [binId, i, ctId, trimmed[i].attribute || null, trimmed[i].notes || null]
+    );
+  }
+}
+
+// Common JSON-aggregation expression for items belonging to a bin.
+// Inlines as a scalar subquery on bins.id; safe to reuse anywhere.
+const BIN_ITEMS_JSON = `
+  COALESCE((
+    SELECT json_agg(json_build_object(
+             'id',              bi.id,
+             'slot',            bi.slot,
+             'content_type_id', bi.content_type_id,
+             'content_type',    ct.name,
+             'attribute',       bi.attribute,
+             'notes',           bi.notes
+           ) ORDER BY bi.slot)
+    FROM bin_items bi
+    LEFT JOIN content_types ct ON bi.content_type_id = ct.id
+    WHERE bi.bin_id = b.id
+  ), '[]'::json) AS items`;
 
 // ============================================================
 // LOCATIONS
@@ -158,10 +284,10 @@ app.delete('/api/locations/:id', async (req, res) => {
 app.get('/api/locations/:id/bins', async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT b.*, bt.name AS box_type_name, ct.name AS content_type
+      `SELECT b.*, bt.name AS box_type_name, bt.is_divided, bt.compartments,
+              ${BIN_ITEMS_JSON}
        FROM bins b
-       LEFT JOIN box_types     bt ON b.box_type_id     = bt.id
-       LEFT JOIN content_types ct ON b.content_type_id = ct.id
+       LEFT JOIN box_types bt ON b.box_type_id = bt.id
        WHERE b.location_id = $1
        ORDER BY b.id`,
       [req.params.id]
@@ -214,24 +340,34 @@ app.delete('/api/box-types/:id', async (req, res) => {
 // ============================================================
 // BINS  — /search must be registered BEFORE /:id
 // ============================================================
+// Search now lives at the item level — each bin_item is a row in the
+// results so M5 and M3 in the same divided bin appear as two hits.
 app.get('/api/bins/search', async (req, res) => {
   const q = `%${(req.query.q || '').toLowerCase()}%`;
   try {
     const r = await pool.query(
-      `SELECT b.*,
+      `SELECT bi.id        AS item_id,
+              bi.slot,
+              bi.attribute,
+              bi.notes,
+              ct.name      AS content_type,
+              b.id         AS bin_id,
+              b.id         AS id,       -- kept for frontend convenience
+              b.grid_x, b.grid_y, b.grid_width, b.grid_length, b.height_u,
+              b.box_type_id,
               l.cabinet_id, l.drawer_id,
-              bt.name AS box_type_name, bt.is_divided, bt.compartments,
-              ct.name AS content_type
-       FROM bins b
-       LEFT JOIN locations     l  ON b.location_id     = l.id
-       LEFT JOIN box_types     bt ON b.box_type_id     = bt.id
-       LEFT JOIN content_types ct ON b.content_type_id = ct.id
-       WHERE LOWER(COALESCE(ct.name,'')) LIKE $1
-          OR LOWER(b.attribute)          LIKE $1
-          OR LOWER(b.notes)              LIKE $1
+              bt.name AS box_type_name, bt.is_divided, bt.compartments
+       FROM bin_items bi
+       JOIN bins b ON bi.bin_id = b.id
+       LEFT JOIN locations     l  ON b.location_id  = l.id
+       LEFT JOIN box_types     bt ON b.box_type_id  = bt.id
+       LEFT JOIN content_types ct ON bi.content_type_id = ct.id
+       WHERE LOWER(COALESCE(ct.name,''))   LIKE $1
+          OR LOWER(COALESCE(bi.attribute,'')) LIKE $1
+          OR LOWER(COALESCE(bi.notes,''))     LIKE $1
           OR LOWER(COALESCE(l.cabinet_id,'')) LIKE $1
-          OR LOWER(COALESCE(l.drawer_id,''))  LIKE $1
-       ORDER BY b.id`,
+          OR LOWER(COALESCE(l.drawer_id,'')) LIKE $1
+       ORDER BY b.id, bi.slot`,
       [q]
     );
     ok(res, r.rows);
@@ -244,11 +380,10 @@ app.get('/api/bins', async (req, res) => {
       `SELECT b.*,
               l.cabinet_id, l.drawer_id,
               bt.name AS box_type_name, bt.is_divided, bt.compartments,
-              ct.name AS content_type
+              ${BIN_ITEMS_JSON}
        FROM bins b
-       LEFT JOIN locations     l  ON b.location_id     = l.id
-       LEFT JOIN box_types     bt ON b.box_type_id     = bt.id
-       LEFT JOIN content_types ct ON b.content_type_id = ct.id
+       LEFT JOIN locations l  ON b.location_id = l.id
+       LEFT JOIN box_types bt ON b.box_type_id = bt.id
        ORDER BY b.id`
     );
     ok(res, r.rows);
@@ -262,11 +397,10 @@ app.get('/api/bins/:id', async (req, res) => {
               l.cabinet_id, l.drawer_id, l.grid_columns, l.grid_rows,
               bt.name AS box_type_name,
               bt.is_divided, bt.compartments, bt.description AS box_type_description,
-              ct.name AS content_type
+              ${BIN_ITEMS_JSON}
        FROM bins b
-       LEFT JOIN locations     l  ON b.location_id     = l.id
-       LEFT JOIN box_types     bt ON b.box_type_id     = bt.id
-       LEFT JOIN content_types ct ON b.content_type_id = ct.id
+       LEFT JOIN locations l  ON b.location_id = l.id
+       LEFT JOIN box_types bt ON b.box_type_id = bt.id
        WHERE b.id = $1`,
       [req.params.id]
     );
@@ -276,22 +410,27 @@ app.get('/api/bins/:id', async (req, res) => {
 
 app.post('/api/bins', async (req, res) => {
   const { location_id, grid_x, grid_y, grid_width, grid_length, height_u,
-          box_type_id, content_type, attribute, notes } = req.body;
+          box_type_id, items } = req.body;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const content_type_id = await resolveContentTypeId(client, content_type);
+    const capacity = await getCapacity(client, box_type_id);
     const r = await client.query(
       `INSERT INTO bins
-         (location_id, grid_x, grid_y, grid_width, grid_length, height_u,
-          box_type_id, content_type_id, attribute, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+         (location_id, grid_x, grid_y, grid_width, grid_length, height_u, box_type_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
       [location_id || null, grid_x ?? null, grid_y ?? null,
        grid_width || 1, grid_length || 1, height_u || 3,
-       box_type_id || null, content_type_id, attribute, notes]
+       box_type_id || null]
     );
+    await replaceBinItems(client, r.rows[0].id, items, capacity);
     await client.query('COMMIT');
-    ok(res, r.rows[0]);
+    // Fetch the canonical row (with items aggregate) for the response.
+    const out = await pool.query(
+      `SELECT b.*, ${BIN_ITEMS_JSON} FROM bins b WHERE b.id = $1`,
+      [r.rows[0].id]
+    );
+    ok(res, out.rows[0]);
   } catch (e) {
     await client.query('ROLLBACK');
     err(res, e);
@@ -302,24 +441,32 @@ app.post('/api/bins', async (req, res) => {
 
 app.put('/api/bins/:id', async (req, res) => {
   const { location_id, grid_x, grid_y, grid_width, grid_length, height_u,
-          box_type_id, content_type, attribute, notes } = req.body;
+          box_type_id, items } = req.body;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const content_type_id = await resolveContentTypeId(client, content_type);
+    const capacity = await getCapacity(client, box_type_id);
     const r = await client.query(
       `UPDATE bins SET
          location_id=$1, grid_x=$2, grid_y=$3, grid_width=$4, grid_length=$5,
-         height_u=$6, box_type_id=$7, content_type_id=$8, attribute=$9, notes=$10,
-         updated_at=NOW()
-       WHERE id=$11 RETURNING *`,
+         height_u=$6, box_type_id=$7, updated_at=NOW()
+       WHERE id=$8 RETURNING *`,
       [location_id || null, grid_x ?? null, grid_y ?? null,
        grid_width || 1, grid_length || 1, height_u || 3,
-       box_type_id || null, content_type_id, attribute, notes,
-       req.params.id]
+       box_type_id || null, req.params.id]
     );
+    if (!r.rows.length) { await client.query('ROLLBACK'); return notFound(res); }
+    // Only replace items when the client actually sent them — keeps PUT
+    // useful for "just move the bin" without touching contents.
+    if (Array.isArray(items)) {
+      await replaceBinItems(client, r.rows[0].id, items, capacity);
+    }
     await client.query('COMMIT');
-    r.rows.length ? ok(res, r.rows[0]) : notFound(res);
+    const out = await pool.query(
+      `SELECT b.*, ${BIN_ITEMS_JSON} FROM bins b WHERE b.id = $1`,
+      [r.rows[0].id]
+    );
+    ok(res, out.rows[0]);
   } catch (e) {
     await client.query('ROLLBACK');
     err(res, e);
@@ -372,6 +519,37 @@ app.delete('/api/content-types/:id', async (req, res) => {
   try {
     await pool.query('DELETE FROM content_types WHERE id=$1', [req.params.id]);
     ok(res, { success: true });
+  } catch (e) { err(res, e); }
+});
+
+// ============================================================
+// CLIENT CONFIG — runtime-mutable settings persisted in
+// app_settings. The env var QR_PAYLOAD_MODE only seeds the
+// initial value on a fresh DB; after that, the UI is the
+// source of truth.
+// ============================================================
+app.get('/api/config', async (_req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT value FROM app_settings WHERE key = 'qr_payload_mode'`
+    );
+    const mode = r.rows[0]?.value || 'url';
+    ok(res, { qrPayloadMode: mode === 'id' ? 'id' : 'url' });
+  } catch (e) { err(res, e); }
+});
+
+app.put('/api/config', async (req, res) => {
+  const { qrPayloadMode } = req.body || {};
+  if (qrPayloadMode !== 'url' && qrPayloadMode !== 'id') {
+    return res.status(400).json({ error: 'qrPayloadMode must be "url" or "id"' });
+  }
+  try {
+    await pool.query(
+      `INSERT INTO app_settings (key, value) VALUES ('qr_payload_mode', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [qrPayloadMode]
+    );
+    ok(res, { qrPayloadMode });
   } catch (e) { err(res, e); }
 });
 

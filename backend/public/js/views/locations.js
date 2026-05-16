@@ -77,11 +77,11 @@ Object.assign(App, {
     let binRects = '';
     for (const b of bins) {
       if (b.grid_x == null) continue;
-      const hue = hueClass(b.content_type);
+      const hue = hueClass(binPrimaryContentType(b));
       binRects += `<rect class="${hue}" x="${b.grid_x*cell + 1}" y="${b.grid_y*cell + 1}"
         width="${(b.grid_width||1)*cell - 2}" height="${(b.grid_length||1)*cell - 2}"
         fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.2" rx="2"
-        ><title>#${b.id} ${esc(b.attribute || b.content_type || '')}</title></rect>`;
+        ><title>#${b.id} ${esc(binSummary(b))}</title></rect>`;
     }
     return `<svg width="${cols*cell}" height="${rows*cell}" viewBox="0 0 ${cols*cell} ${rows*cell}" role="img" aria-label="Drawer ${esc(loc.drawer_id)} layout">
       ${cells}${binRects}

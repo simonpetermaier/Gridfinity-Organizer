@@ -22,11 +22,11 @@ Object.assign(App, {
       for (let c = 0; c < cols; c++) {
         const e = occ[`${c},${r}`];
         if (e) {
-          const hue = hueClass(e.bin.content_type);
+          const hue = hueClass(binPrimaryContentType(e.bin));
           cells += `<td class="dmap-cell filled ${hue}"
             onclick="App.closeModal();App.switchTab('inventory');S.selectedBinId=${e.bin.id};App.render();"
-            title="#${e.bin.id} · ${esc(e.bin.attribute || '')} · ${esc(e.bin.content_type || '')}">
-            ${e.isOrigin ? `<div class="lbl">#${e.bin.id}<br>${esc(e.bin.attribute || e.bin.content_type || '')}</div>` : ''}
+            title="#${e.bin.id} · ${esc(binSummary(e.bin))}">
+            ${e.isOrigin ? `<div class="lbl">#${e.bin.id}<br>${esc(binSummary(e.bin))}</div>` : ''}
           </td>`;
         } else {
           cells += `<td class="dmap-cell" title="(${c},${r})"></td>`;
@@ -44,10 +44,10 @@ Object.assign(App, {
         <div class="caps" style="margin-bottom:8px;">Legend</div>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
           ${bins.map(b => `
-            <div class="${hueClass(b.content_type)}" style="display:flex; align-items:center; gap:8px; font-size:var(--text-sm);">
+            <div class="${hueClass(binPrimaryContentType(b))}" style="display:flex; align-items:center; gap:8px; font-size:var(--text-sm);">
               <span style="width:14px; height:14px; background:var(--accent-soft); border:1px solid var(--accent); border-radius:3px; flex-shrink:0;"></span>
               <span class="mono mute" style="font-size:var(--text-xs);">#${b.id}</span>
-              <span style="font-weight:500;">${esc(b.attribute || b.content_type || '—')}</span>
+              <span style="font-weight:500;">${esc(binSummary(b))}</span>
             </div>`).join('')}
         </div>` : `<p class="mute">No bins placed in this drawer yet.</p>`}
       <div class="modal-footer" style="border-top:1px solid var(--line-soft); margin:24px -20px -16px; padding:16px 20px 12px;">

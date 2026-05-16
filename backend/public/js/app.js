@@ -6,6 +6,7 @@ const NAV = [
   { id: 'box-types',     label: 'Box Types',     icon: 'grid' },
   { id: 'content-types', label: 'Content Types', icon: 'tag' },
   { id: 'search',        label: 'Search',        icon: 'search' },
+  { id: 'scanner',       label: 'Scan',          icon: 'qr' },
 ];
 
 const TAB_TITLE = {
@@ -14,6 +15,7 @@ const TAB_TITLE = {
   'box-types':     'Box Types',
   'content-types': 'Content Types',
   'search':        'Search',
+  'scanner':       'Scan',
 };
 
 const App = {
@@ -22,27 +24,35 @@ const App = {
     // Sprite first so the first paint has icons; small file, served same-origin.
     await injectIconSprite();
 
-    // Bin scan page (mobile, no shell)
+    // Bin scan page (mobile, no shell) — needs config for the inline QR but
+    // can skip the inventory/box/content loads.
     const m = window.location.pathname.match(/^\/bin\/(\d+)$/);
-    if (m) { await this.renderBinScan(m[1]); return; }
+    if (m) { await this.loadConfig(); await this.renderBinScan(m[1]); return; }
 
     await Promise.all([
+      this.loadConfig(),
       this.loadLocations(), this.loadBoxTypes(),
       this.loadContentTypes(), this.loadBins(),
     ]);
     this.render();
   },
 
+  // Tiny client-config fetch — currently just qrPayloadMode but a stable
+  // place to hang future feature flags on. Failures are non-fatal: the
+  // defaults baked into S already match the server's defaults.
+  async loadConfig() {
+    try {
+      const cfg = await api.get('/config');
+      if (cfg && cfg.qrPayloadMode) S.qrPayloadMode = cfg.qrPayloadMode;
+    } catch (e) {
+      console.warn('Config fetch failed; using defaults:', e.message);
+    }
+  },
+
   async loadLocations()    { S.locations    = await api.get('/locations'); },
   async loadBoxTypes()     { S.boxTypes     = await api.get('/box-types'); },
   async loadContentTypes() { S.contentTypes = await api.get('/content-types'); },
   async loadBins()         { S.bins         = await api.get('/bins'); },
-
-  switchTab(tab) {
-    S.tab = tab;
-    if (tab !== 'inventory') S.selectedBinId = null;
-    this.render();
-  },
 
   // ── Top-level shell render ────────────────────────────────────
   render() {
@@ -127,6 +137,31 @@ const App = {
       case 'box-types':     return this.renderBoxTypes();
       case 'content-types': return this.renderContentTypes();
       case 'search':        return this.renderSearch();
+      case 'scanner':       return this.renderScanner();
+    }
+  },
+
+  // Stop the camera stream whenever the user switches tabs.
+  switchTab(tab) {
+    if (S.tab === 'scanner' && tab !== 'scanner' && typeof Scanner !== 'undefined') Scanner.stop();
+    S.tab = tab;
+    if (tab !== 'inventory') S.selectedBinId = null;
+    this.render();
+  },
+
+  // Flip QR payload mode (persisted server-side). Affects every QR rendered
+  // from now on; existing printed stickers in either format keep working
+  // since the in-app scanner accepts both.
+  async setQrMode(mode) {
+    if (mode !== 'url' && mode !== 'id') return;
+    if (S.qrPayloadMode === mode) return;
+    try {
+      const r = await api.put('/config', { qrPayloadMode: mode });
+      S.qrPayloadMode = r.qrPayloadMode;
+      this.render();
+      toast(`QR mode set to ${mode === 'id' ? 'gfbin:N (host-portable)' : 'Full URL'}`);
+    } catch (e) {
+      alert('Failed to update QR mode: ' + e.message);
     }
   },
 
