@@ -157,7 +157,7 @@ generate_cert() {
   [[ -n "$ip" ]]   && sans+=("$ip")
   [[ -n "$host" ]] && sans+=("$host")
   sans+=("localhost" "127.0.0.1")
-  sans+=( ${EXTRA_SANS[@]+"${EXTRA_SANS[@]}"} )
+  sans+=("${EXTRA_SANS[@]}")
   blue "→ Generating cert for: ${sans[*]}"
   mkcert -cert-file "$CERTS_DIR/cert.pem" -key-file "$CERTS_DIR/key.pem" "${sans[@]}"
 }
