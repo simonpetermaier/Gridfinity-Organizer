@@ -101,7 +101,7 @@ Open the bin in the inventory list. The detail pane on the right shows a small Q
 
 ### Renaming tags safely
 
-The **Content Types** tab is the source of truth for tag names. Editing a tag's name is one transactional `UPDATE` — every bin that referenced it now references the new name. Deleting a tag clears that field on the bins (`ON DELETE SET NULL`), so existing bins survive but lose their type label.
+The **Content Types** tab is the source of truth for tag names. Renaming a tag is one SQL `UPDATE` — every item that referenced it picks up the new name through the foreign key. Deleting a tag clears that field on referencing items (`ON DELETE SET NULL`), so the items survive but lose their type label.
 
 ### Switching themes
 
@@ -296,16 +296,20 @@ gridfinity-organizer/
 locations ──┐
             │ 1
             ▼ *
-            bins ────┬───* box_types
-                     └───* content_types
+            bins ────┬──→ box_types
+                     │
+                     │ 1
+                     ▼ 1..N
+                  bin_items ──→ content_types
 ```
 
 - `locations` — one row per drawer; tracks cabinet name, drawer name, grid dimensions, and max stack height.
-- `box_types` — catalog of Gridfinity footprints (size, height, divided/compartments).
-- `content_types` — user-editable tag catalog. Bins reference by id, so renames are a single SQL `UPDATE`.
-- `bins` — the main table. Stores its own `grid_width`/`grid_length` (denormalised from `box_types`) so the placement grid never needs a join, and so the rotate button has somewhere to put the swapped dimensions.
+- `box_types` — catalog of Gridfinity footprints (size, height, `is_divided`, `compartments`).
+- `bins` — physical containers. Store their own `grid_width`/`grid_length` (denormalised from `box_types`) so the placement grid never needs a join, and so the rotate button has somewhere to put the swapped dimensions. **No content fields** — those live in `bin_items`.
+- `bin_items` — what's inside a bin. Each row holds one item: `bin_id`, `slot` (0-indexed compartment), `content_type_id`, `attribute`, `notes`. A `UNIQUE(bin_id, slot)` constraint prevents two items in the same compartment; `ON DELETE CASCADE` from `bins` cleans up when a container is removed. The server caps row count at `box_types.compartments` for divided bins, `1` for undivided.
+- `content_types` — user-editable tag catalog. `bin_items` reference by id, so renames are a single SQL `UPDATE`.
 
-Schema migrations are additive and idempotent — they live in [`ensureSchema()`](backend/server.js) and run on every boot. The initial DDL in [`init.sql`](init.sql) only fires on a fresh Postgres volume.
+Schema migrations are additive and idempotent — they live in [`ensureSchema()`](backend/server.js) and run on every boot. The initial DDL in [`init.sql`](init.sql) only fires on a fresh Postgres volume. The legacy single-content schema is upgraded automatically: the first time a server boots after the multi-item refactor, each existing `bin` becomes a single-slot `bin_item` and the legacy columns are dropped in one transaction.
 
 ### REST API
 
@@ -320,10 +324,32 @@ All routes are JSON. Parameterised queries via `pg`.
 | `GET` / `PUT` / `DELETE` | `/api/box-types/:id` | Single box type |
 | `GET` / `POST` | `/api/content-types` | List or create tags |
 | `GET` / `PUT` / `DELETE` | `/api/content-types/:id` | Single tag — rename cascades through the FK |
-| `GET` | `/api/bins/search?q=` | Substring match across content, attribute, location, notes |
-| `GET` / `POST` | `/api/bins` | List or create bins |
-| `GET` / `PUT` / `DELETE` | `/api/bins/:id` | Single bin |
-| `GET` | `/bin/:id` | Public scan page (serves the SPA, which renders the detail) |
+| `GET` | `/api/bins/search?q=` | Returns **one row per matching `bin_item`** with its parent bin's context |
+| `GET` / `POST` | `/api/bins` | List or create containers. `POST` accepts an optional `items: [{ content_type, attribute, notes }]` array, capped at the box type's `compartments` |
+| `GET` / `PUT` / `DELETE` | `/api/bins/:id` | Single container. `PUT` replaces the items array transactionally when one is supplied; omit it to update bin metadata only |
+| `GET` / `PUT` | `/api/config` | Runtime settings (currently just `qrPayloadMode`) |
+| `GET` | `/bin/:id` | Public scan page (serves the SPA, which renders the detail with every item) |
+
+#### Bin shape
+
+A bin returned by `GET /api/bins` looks like this:
+
+```jsonc
+{
+  "id": 6,
+  "location_id": 1,
+  "grid_x": 0, "grid_y": 0,
+  "grid_width": 1, "grid_length": 2,
+  "height_u": 3,
+  "box_type_id": 10,
+  "box_type_name": "1×2 Div×3",
+  "is_divided": true, "compartments": 2,
+  "items": [
+    { "id": 1, "slot": 0, "content_type_id": 16, "content_type": "Bolt", "attribute": "M5×10", "notes": null },
+    { "id": 2, "slot": 1, "content_type_id": 17, "content_type": "Nut",  "attribute": "M5",    "notes": null }
+  ]
+}
+```
 
 ---
 
@@ -373,7 +399,7 @@ docker compose exec postgres psql -U gridfinity -d gridfinity
 
 ### No tests, no linter
 
-This is a hobby project — there's no test suite or eslint config to run. Verify changes by exercising the UI in a browser; the golden paths are: add bin → place on grid → rotate → save; rename a tag and check existing bins update; scan a printed QR.
+This is a hobby project — there's no test suite or eslint config to run. Verify changes by exercising the UI in a browser; the golden paths are: add an undivided bin with one item → save; add a divided 2-comp bin with two items → save → check the inventory shows two rows tagged `#N·A`/`#N·B`; place a bin on the grid → rotate → save; rename a tag and check existing items update; scan a printed QR.
 
 ---
 

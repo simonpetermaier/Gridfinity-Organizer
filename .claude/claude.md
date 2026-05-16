@@ -85,7 +85,8 @@ box_types (
   description     TEXT
 )
 
--- Placed inventory items (the core table)
+-- Physical containers placed in drawers. NO content fields — those moved
+-- to bin_items in a one-shot migration; see ensureSchema().
 bins (
   id SERIAL PK,                   -- this ID is encoded in the QR code
   location_id     INT → locations,
@@ -95,17 +96,34 @@ bins (
   grid_length     INT,            -- cells occupied in Y (may be rotated)
   height_u        INT,            -- actual height (may override box_type default)
   box_type_id     INT → box_types,
+  created_at      TIMESTAMP,
+  updated_at      TIMESTAMP
+)
+
+-- One row per item inside a bin. Divided box → up to `compartments` rows.
+-- Undivided / no box → max 1 row. Server enforces the cap; the DB doesn't
+-- (capacity depends on a joined column, so it's an app-layer check).
+bin_items (
+  id SERIAL PK,
+  bin_id          INT → bins ON DELETE CASCADE,
+  slot            INT,            -- 0-indexed compartment within the bin
   content_type_id INT → content_types ON DELETE SET NULL,
   attribute       VARCHAR(255),   -- "M5×30", "JST 2.54 mm", etc.
   notes           TEXT,
-  created_at      TIMESTAMP,
-  updated_at      TIMESTAMP
+  updated_at      TIMESTAMP,
+  UNIQUE(bin_id, slot)            -- two items can't share a compartment
 )
 
 -- User-editable tag catalog used by the bin-form datalist
 content_types (
   id SERIAL PK,
   name VARCHAR(100) UNIQUE
+)
+
+-- Runtime-mutable kv store. Seeded from env on first boot, then UI owns it.
+app_settings (
+  key   VARCHAR(64) PK,
+  value TEXT
 )
 ```
 
@@ -150,18 +168,27 @@ POST   /api/content-types               create  { name }
 PUT    /api/content-types/:id           rename (atomic — bins join by id, no cascade needed)
 DELETE /api/content-types/:id           delete (FK ON DELETE SET NULL — referencing bins lose the tag)
 
-GET    /api/bins                        all bins (joined with locations + box_types)
-GET    /api/bins/search?q=<term>        full-text search (IMPORTANT: registered BEFORE /:id)
-GET    /api/bins/:id                    single bin (full join)
-POST   /api/bins                        create bin
-PUT    /api/bins/:id                    update / move bin
-DELETE /api/bins/:id                    delete bin
+GET    /api/bins                        all bins; each row has items: [...] aggregated via BIN_ITEMS_JSON
+GET    /api/bins/search?q=<term>        ONE ROW PER MATCHING bin_item (with bin context); registered BEFORE /:id
+GET    /api/bins/:id                    single bin with full items array
+POST   /api/bins                        create bin; body may include items: [{ content_type, attribute, notes }]
+PUT    /api/bins/:id                    update bin metadata; if body has items array, also replace items transactionally
+DELETE /api/bins/:id                    delete bin (CASCADEs to bin_items)
+
+GET    /api/config                      runtime settings (qrPayloadMode, …) — reads from app_settings
+PUT    /api/config                      mutate a runtime setting from the UI
 
 GET    /bin/:id                         → serves index.html (SPA handles the QR scan page)
 GET    *                                → serves index.html (SPA catch-all)
 ```
 
 **Critical ordering:** `/api/bins/search` must be registered before `/api/bins/:id` in Express or "search" is parsed as an ID. Do not reorder these routes.
+
+**Item capacity is enforced in the server, not the DB.** `getCapacity(client, boxTypeId)` reads `box_types.is_divided`/`compartments` and returns 1 for undivided/unknown box types. `replaceBinItems()` calls it before inserting and throws if `items.length > capacity`. The DB only enforces `UNIQUE(bin_id, slot)` — the capacity cap lives in app code because it depends on a joined column. If you change the validation rules, update both call sites in `POST` and `PUT /api/bins`.
+
+**`PUT /api/bins/:id` items handling:** if the body has an `items` field, items are replaced transactionally. If it's omitted, only bin metadata is updated — useful for "just move the bin" without touching contents. `Array.isArray(items)` is the guard, so `items: []` does clear the bin, but a missing key leaves items alone.
+
+**Aggregation pattern:** the constant `BIN_ITEMS_JSON` near the top of `server.js` is a SQL fragment that produces `items: [...]` as a JSON array via `json_agg(json_build_object(...))` scoped to `b.id`. Reuse it on any query that needs the items inline; don't roll your own.
 
 ---
 
@@ -181,15 +208,20 @@ api        // fetch wrapper: api.get(path), api.post(path, body), api.put(...), 
 
 ```js
 {
-  tab:           'inventory',   // inventory | locations | box-types | content-types | search
+  tab:           'inventory',   // inventory | locations | box-types | content-types | search | scanner
+  theme:         'light',       // light | dark — kept in sync with <html data-theme>
+  qrPayloadMode: 'url',         // 'url' = host-coupled URL · 'id' = host-portable gfbin:N
+  selectedBinId: null,          // for the inventory split view
   locations:     [],
   boxTypes:      [],
   contentTypes:  [],            // user-editable tag catalog (drives the bin-form datalist)
-  bins:          [],
+  bins:          [],            // each bin has items: [{ slot, content_type, attribute, notes, ... }]
   locFilter:     '',
   typeFilter:    '',
+  ctFilter:      'all',         // all | inuse — content-types view
   searchQ:       '',
-  searchResults: [],
+  searchResults: [],            // ITEM rows from /api/bins/search (each has bin_id, slot, ...)
+  formItems:     [],            // draft items inside the bin-form modal (cleared on open)
   grid: {                       // shared state for the bin add/edit modal grid picker
     locId:      null,
     locData:    null,
@@ -203,6 +235,8 @@ api        // fetch wrapper: api.get(path), api.post(path, body), api.put(...), 
   qrBin: null,                  // last-shown bin for the QR print buffer
 }
 ```
+
+**Bin vs item terminology:** a `bin` is a physical container with a placement and a box-type; `items` are the things inside it (one per compartment for divided boxes, max one for undivided). The inventory list shows one row **per item** with `#binId·SlotLetter` IDs for divided bins. The detail pane shows one bin and all its items.
 
 ### Rendering pattern
 
@@ -319,6 +353,6 @@ in the current environment, say so explicitly rather than declaring success.
 - **Frontend HTML:** always escape user data with `esc()` before inserting into template literals.
 - **No build step:** keep the frontend as plain `<script>` files under `backend/public/`. When adding a view, drop a new file under `public/js/views/`, extend the `App` global via `Object.assign(App, { … })`, and add the `<script>` tag in [index.html](../backend/public/index.html) (order matters — after `core.js` and `app.js`).
 - **Joins on `bins` + `box_types`:** never `SELECT b.*, bt.grid_width, bt.grid_length …` — the same-named box-type columns shadow the bin's stored (possibly rotated) dims in the response. Either omit or alias them.
-- **Catalog references:** the `content_types` ↔ `bins` model uses a proper FK (`bins.content_type_id REFERENCES content_types(id) ON DELETE SET NULL`). When adding a new lookup catalog, follow the same shape rather than storing free-text strings on the referencing rows. `POST /api/bins` accepts a `content_type` *string* and the server resolves it to an id (creating the catalog row on the fly if missing) — see `resolveContentTypeId()` in [server.js](../backend/server.js). GET responses still expose `content_type` as a joined string for frontend compat.
+- **Catalog references:** `bin_items.content_type_id REFERENCES content_types(id) ON DELETE SET NULL` is the FK. `POST/PUT /api/bins` accept each item's `content_type` as a *string*; the server resolves it to an id via `resolveContentTypeId(client, name)` — creating the catalog row on the fly when the name is new. GET responses expose `content_type` as a joined string per item for frontend compat. When you add another lookup catalog, mirror this shape (FK + resolve-by-name helper) rather than storing free-text on the referencing rows.
 - **No ORM:** keep queries in `server.js` as plain SQL. The codebase is small enough that an ORM adds more friction than value.
 - **Tailwind:** loaded from CDN. Use only standard utility classes — no arbitrary values like `w-[43px]` as the CDN build won't include them. Bespoke styles belong in [styles/main.css](../backend/public/styles/main.css), driven by CSS variables for theme-readiness.
