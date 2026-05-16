@@ -67,22 +67,21 @@ services:
   # See README "Camera & HTTPS" for the mkcert recipe and the
   # Tailscale alternative (zero-config HTTPS over your tailnet).
   # ──────────────────────────────────────────────────────────────
-  # caddy:
-  #   image: caddy:2-alpine
-  #   restart: unless-stopped
-  #   ports:
-  #     - "80:80"
-  #     - "443:443"
-  #   volumes:
-  #     - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-  #     - ./caddy/certs:/certs:ro
-  #     - caddy_data:/data
-  #     - caddy_config:/config
-  #   depends_on:
-  #     - backend
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/certs:/certs:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
 
 volumes:
   postgres_data:
-  # Uncomment alongside the `caddy:` service above.
-  # caddy_data:
-  # caddy_config:
+  caddy_data:
+  caddy_config:
