@@ -8,13 +8,15 @@ A self-hosted web app for cataloguing the contents of your [Gridfinity](https://
 
 ## Highlights
 
-- 📦 **Inventory split view** — list every bin, click for a detail card with its QR, location, and box type.
+- 📦 **Inventory split view** — one row per item, with a detail card showing every item in the selected container.
+- 🧩 **Multi-item divided bins** — a 2-compartment box holds two distinct items, a 4-comp box holds four, and so on. Undivided boxes are capped at one.
 - 🗄️ **Visual drawers** — each cabinet shows mini-maps of its drawers with bins drawn in their actual positions.
 - 📐 **Box-type gallery** — vector previews of every Gridfinity footprint you have, divided bins included.
-- 🏷️ **Editable content tags** — rename "Bolt" → "Bolts" and every bin that uses it updates in one transaction.
+- 🏷️ **Editable content tags** — rename "Bolt" → "Bolts" and every item that uses it updates instantly.
 - 🎨 **Multi-color taxonomy** — each tag picks one of four palette colors so the drawer map turns into a glanceable heat-map.
-- 🔍 **Search palette** — type to find bins by content, attribute, cabinet, drawer, or notes.
-- 📱 **Scan a QR → mobile detail page** — print the code, stick it on the bin, point your phone at it.
+- 🔍 **Search palette** — type to find any item by content, attribute, cabinet, drawer, or notes.
+- 📷 **In-app QR scanner** — open the **Scan** tab on your phone, point at a sticker, jump straight to the bin.
+- 📱 **Scan a QR → mobile detail page** — print the code, stick it on the bin, the public detail page lists everything inside.
 - 🌓 **Light & dark themes** — clay-and-paper or VS Code-style. Respects `prefers-color-scheme`.
 - 📲 **Mobile layout** — narrow viewports get a bottom nav, a full-width search bar, and edge-to-edge cards. Desktop is untouched.
 - 💾 **Built-in backups** — automatic `pg_dump` on every restart and on a schedule, with a one-shot restore flag.
@@ -84,12 +86,14 @@ backend:
 1. Click **+ Drawer** (top-right of the **Drawers** tab) and describe a real drawer — its cabinet, name, grid dimensions, and how tall stacks can go.
 2. Switch to **Box Types** and either pick one of the seeded shapes or add your own (e.g. `1×2×3`, `1×4 Div×3`).
 3. Back on **Inventory**, click **+ Bin**:
-   - Pick a content type (or type a new one — the catalog will pick it up).
-   - Enter the *attribute* — the specific thing inside: `M5×30`, `JST 2.54 mm`, etc.
-   - Choose the box type and the drawer.
+   - Pick a **box type**. Undivided types lock the form to one item; divided types unlock an `Items (N/cap)` editor where you can hit *Add item* up to `cap` times — one row per compartment.
+   - For each item, pick a *content type* (or type a new one — the catalog will pick it up) and write the *attribute* — the specific thing inside: `M5×30`, `JST 2.54 mm`, etc. Notes are optional.
+   - Choose the drawer.
    - In the grid picker, click the top-left corner where the bin sits. The footprint highlights green.
    - **↻ Rotate** swaps width and length for non-square bins.
-4. Save. The bin gets a numeric ID (`#1`, `#2`, …) and shows up in the list.
+4. Save. The bin gets a numeric ID (`#1`, `#2`, …) and shows up in the list. A divided bin's items appear as separate rows tagged `#1·A`, `#1·B`, … so you can tell which compartment holds what.
+
+> ✋ **Capacity is enforced server-side.** Trying to save more items than a box type's `compartments` value returns an error — switch to a divided box type with the right compartment count first.
 
 ### Printing the QR
 

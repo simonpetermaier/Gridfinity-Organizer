@@ -39,20 +39,23 @@ Object.assign(App, {
       return esc(str.slice(0, i)) + '<mark>' + esc(str.slice(i, i + S.searchQ.length)) + '</mark>' + esc(str.slice(i + S.searchQ.length));
     };
 
-    // Group: bins are the only result type the backend returns today.
+    // Each result is one item (bin_items row joined with its parent bin).
     return `
       <div class="palette-group">
-        <div class="palette-group-head">Bins · ${S.searchResults.length}</div>
-        ${S.searchResults.map(b => `
-          <div class="palette-result" onclick="App.switchTab('inventory');S.selectedBinId=${b.id};App.render();">
-            <span class="bin-id mono">#${b.id}</span>
+        <div class="palette-group-head">Items · ${S.searchResults.length}</div>
+        ${S.searchResults.map(b => {
+          const slot = b.is_divided ? '·' + String.fromCharCode(65 + (b.slot || 0)) : '';
+          return `
+          <div class="palette-result" onclick="App.switchTab('inventory');S.selectedBinId=${b.bin_id || b.id};App.render();">
+            <span class="bin-id mono">#${b.bin_id || b.id}${slot}</span>
             <div style="flex:1; min-width:0;">
               <div class="title">${mark(b.attribute || b.content_type || '—')}</div>
               <div class="sub">${esc(b.content_type || '—')} · ${esc(b.cabinet_id || '—')} / ${esc(b.drawer_id || '—')}${b.grid_x != null ? ' · (' + b.grid_x + ',' + b.grid_y + ')' : ''}</div>
             </div>
             ${b.content_type ? `<span class="pill accent ${hueClass(b.content_type)}">${esc(b.content_type)}</span>` : ''}
             <span class="kbd">↵</span>
-          </div>`).join('')}
+          </div>`;
+        }).join('')}
       </div>`;
   },
 

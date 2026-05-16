@@ -54,6 +54,7 @@ const S = {
   ctFilter:      'all',         // all | inuse  — content-types view
   searchQ:       '',
   searchResults: [],
+  formItems:     [],            // draft items inside the bin form modal
   // grid picker state (shared for add/edit bin modals)
   grid: {
     locId:      null,
@@ -92,6 +93,26 @@ function contentHue(name) {
 function hueClass(name) {
   const h = contentHue(name);
   return h ? `hue-${h}` : '';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BIN HELPERS — bins now hold a list of items. These shape the
+// data for short-label rendering (tooltips, mini cells, etc.).
+// ═══════════════════════════════════════════════════════════════
+function binSummary(b) {
+  const items = b?.items || [];
+  if (!items.length) return '— empty —';
+  if (items.length === 1) {
+    const it = items[0];
+    return it.attribute || it.content_type || '— untagged —';
+  }
+  // Multi-item — show "Bolt, Nut" or "Bolt + 2 more".
+  const names = items.map(i => i.attribute || i.content_type || '·').filter(Boolean);
+  return names.length <= 3 ? names.join(', ') : `${names[0]} + ${names.length - 1} more`;
+}
+function binPrimaryContentType(b) {
+  const items = b?.items || [];
+  return items[0]?.content_type || null;
 }
 
 // ═══════════════════════════════════════════════════════════════
