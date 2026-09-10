@@ -64,9 +64,14 @@ Object.assign(App, {
       </div>`;
   },
 
-  _miniGrid(loc, bins) {
-    const cell = 14;
+  // selectedId, when given, switches to "highlight mode": every other bin
+  // is drawn in a neutral grey and only the selected one uses the theme's
+  // accent color — used by the inventory grid-position card to call out
+  // the selected bin. Without selectedId, bins keep their usual
+  // content-type hue coloring (used by the Drawers tab).
+  _miniGrid(loc, bins, selectedId = null, cell = 14) {
     const cols = loc.grid_columns, rows = loc.grid_rows;
+    const highlightMode = selectedId != null;
     let cells = '';
     for (let y = 0; y < rows; y++) {
       for (let x = 0; x < cols; x++) {
@@ -77,10 +82,21 @@ Object.assign(App, {
     let binRects = '';
     for (const b of bins) {
       if (b.grid_x == null) continue;
-      const hue = hueClass(binPrimaryContentType(b));
+      const isSel = b.id === selectedId;
+      let hue = '', fill, stroke, sw;
+      if (highlightMode) {
+        fill   = isSel ? 'var(--accent-soft)' : 'color-mix(in srgb, var(--mute) 18%, transparent)';
+        stroke = isSel ? 'var(--accent)' : 'var(--mute)';
+        sw     = isSel ? 2.2 : 1.2;
+      } else {
+        hue    = hueClass(binPrimaryContentType(b));
+        fill   = 'var(--accent-soft)';
+        stroke = 'var(--accent)';
+        sw     = 1.2;
+      }
       binRects += `<rect class="${hue}" x="${b.grid_x*cell + 1}" y="${b.grid_y*cell + 1}"
         width="${(b.grid_width||1)*cell - 2}" height="${(b.grid_length||1)*cell - 2}"
-        fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.2" rx="2"
+        fill="${fill}" stroke="${stroke}" stroke-width="${sw}" rx="2"
         ><title>#${b.id} ${esc(binSummary(b))}</title></rect>`;
     }
     return `<svg width="${cols*cell}" height="${rows*cell}" viewBox="0 0 ${cols*cell} ${rows*cell}" role="img" aria-label="Drawer ${esc(loc.drawer_id)} layout">
