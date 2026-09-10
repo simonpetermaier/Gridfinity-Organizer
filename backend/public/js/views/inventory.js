@@ -57,10 +57,37 @@ Object.assign(App, {
             `<div class="inv-row empty">No items match the current filters.</div>`}
         </div>
 
-        <div class="card inv-detail">
-          ${sel ? this._invDetail(sel) :
-            `<div class="placeholder">Select a bin to see its details.</div>`}
+        <div class="inv-right">
+          <div class="card inv-detail">
+            ${sel ? this._invDetail(sel) :
+              `<div class="placeholder">Select a bin to see its details.</div>`}
+          </div>
+
+          <div class="card">
+            <div class="caps" style="margin-bottom:8px;">Grid position</div>
+            ${this._invGridMap(sel)}
+          </div>
         </div>
+      </div>`;
+  },
+
+  // Mini grid map for the currently selected bin, highlighting its footprint
+  // within its drawer. Reuses App._miniGrid (locations.js) with a selectedId.
+  _invGridMap(bin) {
+    if (!bin) return `<div class="mute" style="font-size:var(--text-sm);">Select a bin to see its position.</div>`;
+
+    const loc = bin.location_id != null ? S.locations.find(l => l.id === bin.location_id) : null;
+    if (!loc || bin.grid_x == null) {
+      return `<div class="mute" style="font-size:var(--text-sm);">This bin isn't placed in a drawer yet.</div>`;
+    }
+
+    const drawerBins = S.bins.filter(b => b.location_id === loc.id);
+    return `
+      <div class="inv-minimap" onclick="App.showDrawerMap(${loc.id})" title="Open full drawer map">
+        ${this._miniGrid(loc, drawerBins, bin.id, 56)}
+      </div>
+      <div class="mute" style="font-size:var(--text-xs); margin-top:8px; text-align:center;">
+        ${esc(loc.cabinet_id)} · ${esc(loc.drawer_id)} — (${bin.grid_x}, ${bin.grid_y})
       </div>`;
   },
 
