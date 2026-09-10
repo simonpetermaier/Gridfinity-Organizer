@@ -333,6 +333,17 @@ table.gf-table tbody tr:hover { background: var(--soft); }
 @media (max-width: 1100px) {
   .inv-split { grid-template-columns: 1fr; }
 }
+.inv-right {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.inv-minimap {
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  padding: 4px 0;
+}
 .inv-list .inv-row {
   display: grid;
   grid-template-columns: 56px 1fr 0.9fr 0.9fr 28px;
