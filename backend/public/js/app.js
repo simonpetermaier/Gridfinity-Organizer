@@ -18,6 +18,56 @@ const TAB_TITLE = {
   'scanner':       'Scan',
 };
 
+// Per-browser sidebar customization (order + on/off) — same persistence
+// pattern as Theme (localStorage, no server round-trip). Stored as an
+// ordered [{id, hidden}] list; NAV stays the source of truth for
+// label/icon so a future NAV addition just appears (visible, at the end)
+// without needing a migration.
+const MenuItems = {
+  STORAGE_KEY: 'gridfinity:menuItems',
+
+  load() {
+    try {
+      const raw = localStorage.getItem(this.STORAGE_KEY);
+      const parsed = raw && JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : null;
+    } catch { return null; }
+  },
+  save(list) {
+    try { localStorage.setItem(this.STORAGE_KEY, JSON.stringify(list)); } catch {}
+  },
+
+  // Full list (visible + hidden) in display order, NAV's label/icon merged in.
+  list() {
+    const saved = this.load();
+    if (!saved) return NAV.map(n => ({ ...n, hidden: false }));
+    const byId = Object.fromEntries(NAV.map(n => [n.id, n]));
+    const seen = new Set();
+    const result = [];
+    for (const s of saved) {
+      const n = byId[s.id];
+      if (!n) continue; // stale id (e.g. removed tab) — drop it
+      result.push({ ...n, hidden: !!s.hidden });
+      seen.add(s.id);
+    }
+    for (const n of NAV) if (!seen.has(n.id)) result.push({ ...n, hidden: false });
+    return result;
+  },
+  visible() { return this.list().filter(n => !n.hidden); },
+
+  toggle(id) {
+    this.save(this.list().map(n => n.id === id ? { id: n.id, hidden: !n.hidden } : { id: n.id, hidden: n.hidden }));
+  },
+  move(id, dir) {
+    const list = this.list();
+    const i = list.findIndex(n => n.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    this.save(list.map(({ id, hidden }) => ({ id, hidden })));
+  },
+};
+
 const App = {
 
   async init() {
@@ -82,7 +132,7 @@ const App = {
           </div>
         </div>
         <nav>
-          ${NAV.map(n => `
+          ${MenuItems.visible().map(n => `
             <button class="nav-item ${S.tab === n.id ? 'active' : ''}"
                     onclick="App.switchTab('${n.id}')"
                     ${S.tab === n.id ? 'aria-current="page"' : ''}>
@@ -91,6 +141,10 @@ const App = {
             </button>`).join('')}
         </nav>
         <div class="sidebar-spacer"></div>
+        <button class="nav-item settings-btn" onclick="App.showSettings()" aria-label="Settings">
+          <span class="nav-ico">${icon('settings', 16)}</span>
+          <span>Settings</span>
+        </button>
         <div class="sidebar-stats">
           <div class="sidebar-stats-label">This workspace</div>
           <div class="sidebar-stats-value">${S.bins.length} bins · ${S.locations.length} drawers</div>
@@ -118,6 +172,7 @@ const App = {
           <span class="qf-text">Jump to a bin, drawer, or type…</span>
           <span class="kbd">/</span>
         </button>
+        ${isMobile() ? `<button class="icon-btn topbar-settings-btn" onclick="App.showSettings()" aria-label="Settings">${icon('settings', 18)}</button>` : ''}
         ${action || ''}
       </header>`;
   },
@@ -168,6 +223,93 @@ const App = {
     } catch (e) {
       alert('Failed to update QR mode: ' + e.message);
     }
+  },
+
+  SETTINGS_PAGES: [
+    { id: 'appearance', label: 'Appearance' },
+    { id: 'menu-items', label: 'Menu Items' },
+  ],
+
+  showSettings() { this.openModal('Settings', this._settingsBody()); },
+
+  setSettingsTab(id) {
+    S.settingsTab = id;
+    $('modal-body').innerHTML = this._settingsBody();
+  },
+
+  _settingsBody() {
+    return `
+      <div class="settings-layout">
+        <nav class="settings-nav">
+          ${this.SETTINGS_PAGES.map(p => `
+            <button class="settings-nav-item ${S.settingsTab === p.id ? 'active' : ''}" onclick="App.setSettingsTab('${p.id}')">
+              ${esc(p.label)}
+            </button>`).join('')}
+        </nav>
+        <div class="settings-page">
+          ${this._settingsPage()}
+        </div>
+      </div>
+      <div class="modal-footer" style="border-top:1px solid var(--line-soft); margin:24px -20px -16px; padding:16px 20px 12px;">
+        <button class="btn btn-secondary" onclick="App.closeModal()">Close</button>
+      </div>`;
+  },
+
+  _settingsPage() {
+    switch (S.settingsTab) {
+      case 'menu-items': return this._settingsMenuItemsPage();
+      case 'appearance':
+      default:           return this._settingsAppearancePage();
+    }
+  },
+
+  // Re-render the app (so the sidebar/bottom nav picks up the change) and
+  // refresh the modal body in place (it lives outside #root, so App.render()
+  // alone wouldn't touch it).
+  _refreshSettings() {
+    this.render();
+    const body = $('modal-body');
+    if (body) body.innerHTML = this._settingsBody();
+  },
+
+  _settingsAppearancePage() {
+    const current = Theme.current();
+    const opt = (id, label, iconName) => `
+      <button class="pill ${current === id ? 'active' : ''}" onclick="Theme.apply('${id}');App._refreshSettings()">
+        ${icon(iconName, 12)} ${label}
+      </button>`;
+    return `
+      <div class="field-label" style="margin-bottom:10px;">Theme</div>
+      <div style="display:flex; gap:8px;">
+        ${opt('light', 'Light', 'sun')}
+        ${opt('dark', 'Dark', 'moon')}
+      </div>`;
+  },
+
+  _settingsMenuItemsPage() {
+    const items = MenuItems.list();
+    return `
+      <div class="field-label" style="margin-bottom:10px;">Sidebar / bottom nav items</div>
+      <div class="menu-items-list">
+        ${items.map((it, i) => `
+          <div class="menu-item-row ${it.hidden ? 'is-hidden' : ''}">
+            <input type="checkbox" ${it.hidden ? '' : 'checked'}
+                   onchange="MenuItems.toggle('${it.id}');App._refreshSettings()"
+                   aria-label="Show ${esc(it.label)}">
+            <span class="nav-ico">${icon(it.icon, 16)}</span>
+            <span class="menu-item-label">${esc(it.label)}</span>
+            <div class="menu-item-sort">
+              <button class="icon-btn" style="transform:rotate(-90deg);" ${i === 0 ? 'disabled' : ''}
+                      onclick="MenuItems.move('${it.id}',-1);App._refreshSettings()" aria-label="Move ${esc(it.label)} up">
+                ${icon('chevron', 14)}
+              </button>
+              <button class="icon-btn" style="transform:rotate(90deg);" ${i === items.length - 1 ? 'disabled' : ''}
+                      onclick="MenuItems.move('${it.id}',1);App._refreshSettings()" aria-label="Move ${esc(it.label)} down">
+                ${icon('chevron', 14)}
+              </button>
+            </div>
+          </div>`).join('')}
+      </div>`;
   },
 
   // ── Modal helpers ────────────────────────────────────────────

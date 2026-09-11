@@ -49,6 +49,7 @@ const api = {
 // ═══════════════════════════════════════════════════════════════
 const S = {
   tab:           'inventory',   // inventory | locations | box-types | content-types | search | scanner
+  settingsTab:   'appearance',  // appearance | menu-items — active page inside the Settings modal
   qrPayloadMode: 'url',         // 'url' = host-coupled URL · 'id' = host-portable gfbin:N
   theme:         'light',       // light | dark — kept in sync with <html data-theme>
   selectedBinId: null,          // for the inventory split view
