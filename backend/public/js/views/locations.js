@@ -3,9 +3,15 @@
 Object.assign(App, {
 
   renderLocations() {
+    // Topbar quick-filter narrows by cabinet/drawer id or description.
+    const q = S.quickFilter.trim().toLowerCase();
+    const filtered = q
+      ? S.locations.filter(l => `${l.cabinet_id} ${l.drawer_id} ${l.attributes || ''}`.toLowerCase().includes(q))
+      : S.locations;
+
     // Group drawers by cabinet, ordered by name.
     const cabs = {};
-    for (const l of S.locations) (cabs[l.cabinet_id] = cabs[l.cabinet_id] || []).push(l);
+    for (const l of filtered) (cabs[l.cabinet_id] = cabs[l.cabinet_id] || []).push(l);
     const cabNames = Object.keys(cabs).sort();
     const cabCount = cabNames.length;
 
@@ -23,7 +29,7 @@ Object.assign(App, {
       ` : `
         <div class="card" style="text-align:center; padding:48px 16px;">
           <div style="color:var(--mute); margin-bottom:12px;">${icon('drawer', 48)}</div>
-          <div class="mute">No drawers yet. Add your first drawer from the top right.</div>
+          <div class="mute">${q ? 'Nothing matches your filter.' : 'No drawers yet. Add your first drawer from the top right.'}</div>
         </div>`}
     `;
   },

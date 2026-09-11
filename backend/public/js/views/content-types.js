@@ -13,6 +13,7 @@ Object.assign(App, {
     const inUseCount = S.contentTypes.filter(ct => usage[ct.name]).length;
     const maxUsage = Math.max(1, ...Object.values(usage));
     const filterAll = !S.ctFilter || S.ctFilter === 'all';
+    const q = S.quickFilter.trim().toLowerCase();
 
     return `
       <div class="page-header">
@@ -29,7 +30,9 @@ Object.assign(App, {
 
       ${S.contentTypes.length ? `
         <div class="tag-grid">
-          ${S.contentTypes.filter(ct => filterAll || usage[ct.name]).map(ct => this._tagCard(ct, usage[ct.name] || 0, maxUsage)).join('') ||
+          ${S.contentTypes
+            .filter(ct => (filterAll || usage[ct.name]) && (!q || ct.name.toLowerCase().includes(q)))
+            .map(ct => this._tagCard(ct, usage[ct.name] || 0, maxUsage)).join('') ||
             '<div class="mute">Nothing matches that filter.</div>'}
         </div>
       ` : `
