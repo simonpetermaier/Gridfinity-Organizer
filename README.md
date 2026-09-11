@@ -4,22 +4,25 @@ A self-hosted web app for cataloguing the contents of your [Gridfinity](https://
 
 > Built around a small Postgres + Node.js stack. No build pipeline, no framework, no account system. Spin it up with one `docker compose` command and start tagging bins.
 
+![Inventory view](Documentation/images/inventory-desktop.png)
+
 ---
 
 ## Highlights
 
-- 📦 **Inventory split view** — one row per item, with a detail card showing every item in the selected container.
+- 📦 **Inventory split view** — one row per item, with a detail card showing every item in the selected container, plus a live grid-position mini-map that highlights exactly where the selected bin sits in its drawer.
 - 🧩 **Multi-item divided bins** — a 2-compartment box holds two distinct items, a 4-comp box holds four, and so on. Undivided boxes are capped at one.
 - 🗄️ **Visual drawers** — each cabinet shows mini-maps of its drawers with bins drawn in their actual positions.
 - 📐 **Box-type gallery** — vector previews of every Gridfinity footprint you have, divided bins included.
 - 🏷️ **Editable content tags** — rename "Bolt" → "Bolts" and every item that uses it updates instantly.
 - 🎨 **Multi-color taxonomy** — each tag picks one of four palette colors so the drawer map turns into a glanceable heat-map.
-- 🔍 **Search palette** — type to find any item by content, attribute, cabinet, drawer, or notes.
+- 🔎 **Live quick-filter** — the topbar search box filters whatever list is on screen as you type (no navigation, no page reload); a dedicated **Search** page is still there for a full cross-field search.
 - 📷 **In-app QR scanner** — open the **Scan** tab on your phone, point at a sticker, jump straight to the bin.
 - 📱 **Scan a QR → mobile detail page** — print the code, stick it on the bin, the public detail page lists everything inside.
-- 🌓 **Light & dark themes** — clay-and-paper or VS Code-style. Respects `prefers-color-scheme`.
-- 📲 **Mobile layout** — narrow viewports get a bottom nav, a full-width search bar, and edge-to-edge cards. Desktop is untouched.
-- 💾 **Built-in backups** — automatic `pg_dump` on every restart and on a schedule, with a one-shot restore flag.
+- ⚙️ **Settings panel** — a proper Settings window (gear icon) with Appearance (theme), Menu Items (show/hide/reorder the sidebar), and a Database section covering backups and export/import. See [Settings](#settings) below.
+- 🌓 **Light & dark themes** — clay-and-paper or VS Code-style. Respects `prefers-color-scheme`, and switchable from Settings → Appearance.
+- 📲 **Mobile layout** — narrow viewports get a bottom nav, a full-width filter bar, edge-to-edge cards, and tapping an inventory row splits the table open in place instead of hiding detail off-screen. Desktop is untouched.
+- 💾 **Built-in backups** — automatic `pg_dump` on every restart and on a schedule (interval editable live from Settings, no restart needed), with a one-shot restore flag, plus one-click manual backups, SQL/CSV export, and a non-destructive CSV import.
 
 ---
 
@@ -33,9 +36,9 @@ cd gridfinity-organizer
 docker compose up -d
 ```
 
-Open **<http://localhost:3000>** and you're in. The first launch seeds the database with 4 example drawers, 9 common Gridfinity box types, and an 11-tag content-type catalog so the UI has something to draw.
+Open **<http://localhost:3333>** and you're in. The first launch seeds the database with 4 example drawers, 9 common Gridfinity box types, and an 11-tag content-type catalog so the UI has something to draw.
 
-> 💡 **Want to use it from your phone too?** Open the app from your computer's LAN IP (e.g. `http://192.168.1.50:3000`) the very first time. QR codes encode whatever origin you visit the app from, so a code generated while you were on `localhost` won't be reachable from another device.
+> 💡 **Want to use it from your phone too?** Open the app from your computer's LAN IP (e.g. `http://192.168.1.50:3333`) the very first time. QR codes encode whatever origin you visit the app from, so a code generated while you were on `localhost` won't be reachable from another device.
 
 To stop the stack: `docker compose down`. To wipe everything (including data): `docker compose down -v`.
 
@@ -54,17 +57,17 @@ All settings live in [`docker-compose.yml`](docker-compose.yml). The defaults wo
 | `DB_NAME` | `gridfinity` | Database name |
 | `DB_USER` | `gridfinity` | Database role |
 | `DB_PASSWORD` | `gridfinity_pw` | **Change this** if you expose the app outside your LAN |
-| `PORT` | `3000` | HTTP port the backend listens on |
+| `PORT` | `3333` | HTTP port the backend listens on |
 
 ### Backups
 
-The backend ships with a small backup module that runs `pg_dump` on every startup and on a recurring interval. Dumps land in a host directory you can browse and copy off-box.
+The backend ships with a small backup module that runs `pg_dump` on every startup and on a recurring interval. Dumps land in a host directory you can browse and copy off-box. The interval, manual backups, and export/import are also reachable live from **Settings → Database** in the UI — see [Settings](#settings).
 
 | Variable | Default | What it does |
 |---|---|---|
 | `BACKUP_DIR` | `/backups` | Where dumps live inside the container (bind-mounted from `./backups` on the host) |
-| `BACKUP_INTERVAL_DAYS` | `7` | Schedule cadence in days. Set to `0` to disable the recurring dump (startup dump still runs) |
-| `BACKUP_RETAIN` | `14` | How many of the newest dumps to keep. Older ones are pruned after each new backup |
+| `BACKUP_INTERVAL_DAYS` | `7` | Schedule cadence in days — **seeds the initial value only** (same pattern as `QR_PAYLOAD_MODE` below). After first boot, Settings → Database → Backup is the source of truth; changing it there reschedules the running backend immediately, no restart needed |
+| `BACKUP_RETAIN` | `14` (`5` in the shipped compose file) | How many of the newest dumps to keep. Older ones are pruned after each new backup |
 | `RESTORE_FROM` | _(unset)_ | If set to a filename in `BACKUP_DIR`, the backend restores from it on boot **before** running migrations |
 
 ### Changing the port
@@ -74,7 +77,7 @@ Edit the `ports:` line in `docker-compose.yml`:
 ```yaml
 backend:
   ports:
-    - "8080:3000"   # host:container — visit http://localhost:8080
+    - "8080:3333"   # host:container — visit http://localhost:8080
 ```
 
 ---
@@ -84,7 +87,12 @@ backend:
 ### Adding your first bin
 
 1. Click **+ Drawer** (top-right of the **Drawers** tab) and describe a real drawer — its cabinet, name, grid dimensions, and how tall stacks can go.
+
+   ![Drawers tab](Documentation/images/drawers.png)
+
 2. Switch to **Box Types** and either pick one of the seeded shapes or add your own (e.g. `1×2×3`, `1×4 Div×3`).
+
+   ![Box Types gallery](Documentation/images/box-types.png)
 3. Back on **Inventory**, click **+ Bin**:
    - Pick a **box type**. Undivided types lock the form to one item; divided types unlock an `Items (N/cap)` editor where you can hit *Add item* up to `cap` times — one row per compartment.
    - For each item, pick a *content type* (or type a new one — the catalog will pick it up) and write the *attribute* — the specific thing inside: `M5×30`, `JST 2.54 mm`, etc. Notes are optional.
@@ -103,9 +111,61 @@ Open the bin in the inventory list. The detail pane on the right shows a small Q
 
 The **Content Types** tab is the source of truth for tag names. Renaming a tag is one SQL `UPDATE` — every item that referenced it picks up the new name through the foreign key. Deleting a tag clears that field on referencing items (`ON DELETE SET NULL`), so the items survive but lose their type label.
 
+![Content Types tab](Documentation/images/content-types.png)
+
 ### Switching themes
 
-Use the **☀️/🌙** toggle in the sidebar (or its mobile counterpart). The choice is saved to `localStorage`; first visits pick up your OS-level dark mode preference automatically.
+Use the **☀️/🌙** toggle in the sidebar (or its mobile counterpart), or set it from **Settings → Appearance**. The choice is saved to `localStorage`; first visits pick up your OS-level dark mode preference automatically.
+
+![Dark theme](Documentation/images/dark-theme.png)
+
+### Filtering the current page
+
+The topbar search box doesn't navigate anywhere — it filters whatever's on screen as you type. Typing `M6` on the **Inventory** tab narrows the table to items whose content type, attribute, or notes contain "M6"; the same box narrows drawers, box types, and content tags on their respective pages. The **Search** page (sidebar) is unaffected and still does its own cross-field lookup.
+
+![Inventory filtered by "M6"](Documentation/images/inventory-quickfilter.png)
+
+### On mobile
+
+Narrow viewports swap the sidebar for a bottom nav and the detail/grid-position panel moves inline: tapping a row in the **Inventory** table splits the table open right there instead of hiding the detail off-screen, and the view stays anchored on the row you tapped.
+
+![Mobile inventory with the table split open](Documentation/images/mobile-inventory-split.png)
+
+---
+
+## Settings
+
+Click the gear icon (sidebar on desktop, topbar on mobile) to open **Settings** — a small modal split into a page list on the left and content on the right.
+
+![Settings — Appearance](Documentation/images/settings-appearance.png)
+
+### Appearance
+
+Just the light/dark theme selector, mirroring the sidebar toggle.
+
+### Menu Items
+
+Every sidebar / bottom-nav entry, with a checkbox to show or hide it and up/down arrows to reorder it. Changes apply immediately and are remembered per-browser (`localStorage`) — they don't touch the server, so each device/browser can have its own layout.
+
+![Settings — Menu Items](Documentation/images/settings-menu-items.png)
+
+### Database
+
+Two pages, separated from the rest of the list by a divider:
+
+**Backup**
+
+- **Backup interval (days)** — live-editable version of `BACKUP_INTERVAL_DAYS` (see [Backups](#backups) below). Saves to the database and reschedules the running backend immediately.
+- **Create Backup** — triggers an on-demand `pg_dump` right away, on top of the startup/scheduled ones.
+
+![Settings — Database → Backup](Documentation/images/settings-database-backup.png)
+
+**Export / Import**
+
+- **Export** — pick **SQL** (a full `pg_dump`, identical in shape to the automatic backups — the right choice for moving to a new host or a true restore) or **CSV** (one row per item, with its box type, drawer, position, tag, attribute, and notes — a spreadsheet-friendly sheet, not a full schema dump). Either downloads straight from the browser.
+- **Import** — accepts a CSV in the export's own shape and is **strictly additive**: it only inserts new bins/items, never updates or deletes anything. A row is skipped (and reported) if its box type or drawer doesn't already exist; if its recorded grid position is already occupied, the bin is imported unplaced rather than overlapping something. There's no SQL import — applying a full dump non-destructively isn't something that can be done safely, so full-fidelity transfer goes through [`RESTORE_FROM`](#restoring-a-previous-dump) instead, which is deliberately a full overwrite.
+
+![Settings — Database → Export/Import](Documentation/images/settings-database-export-import.png)
 
 ---
 
@@ -203,7 +263,7 @@ gridfinity-2026-05-22T18-00-57Z.sql
 
 ### Manual backups
 
-The startup backup gives you a fresh dump on every restart, so the simplest "backup now" is:
+The easiest way is **Settings → Database → Backup → Create Backup** in the UI — one click, no restart. Without the UI, the startup backup gives you a fresh dump on every restart, so the CLI equivalent is:
 
 ```bash
 docker compose restart backend
@@ -228,7 +288,7 @@ What happens on boot:
 
 ### Disabling the schedule
 
-Set `BACKUP_INTERVAL_DAYS: 0` if you only want the startup dump.
+Set the interval to `0` in **Settings → Database → Backup** (takes effect immediately), or set `BACKUP_INTERVAL_DAYS: 0` in `docker-compose.yml` before the first boot if you only want the startup dump from day one.
 
 ---
 
@@ -263,27 +323,31 @@ gridfinity-organizer/
 ├── docker-compose.yml              # postgres + backend services
 ├── init.sql                        # schema DDL + seed (runs only on a fresh DB volume)
 ├── backups/                        # SQL dumps land here (bind-mounted)
+├── Documentation/
+│   ├── images/                     # screenshots embedded in this README
+│   └── Scripts/                    # capture-screenshots.js — renders the images above
 └── backend/
     ├── Dockerfile                  # node:20-alpine + postgresql16-client
     ├── package.json                # deps: express, pg, cors
     ├── server.js                   # REST routes + ensureSchema() migration
-    ├── backup.js                   # pg_dump / psql + retention + RESTORE_FROM
+    ├── backup.js                   # pg_dump / psql + retention + RESTORE_FROM + live rescheduling
     └── public/
         ├── index.html              # thin shell — modals, root div, script tags
-        ├── icons/                  # SVG sprite (21 icons)
+        ├── icons/                  # SVG sprite (22 icons)
         ├── styles/
         │   ├── tokens.css          # design tokens — colors, type, spacing, motion
         │   └── main.css            # component styles + mobile media block
         └── js/
-            ├── core.js             # state, api helper, esc, contentHue, icon helper
+            ├── core.js             # state, api helper, esc, contentHue, icon helper, isMobile
             ├── theme.js            # light/dark toggle + persistence
-            ├── app.js              # App namespace + shell render
+            ├── app.js              # App namespace, shell render, Settings modal, MenuItems
             └── views/              # one file per screen
                 ├── inventory.js
                 ├── locations.js
                 ├── box-types.js
                 ├── content-types.js
                 ├── search.js
+                ├── scanner.js
                 ├── bin-form.js
                 ├── bin-scan.js
                 ├── drawer-map.js
@@ -328,6 +392,10 @@ All routes are JSON. Parameterised queries via `pg`.
 | `GET` / `POST` | `/api/bins` | List or create containers. `POST` accepts an optional `items: [{ content_type, attribute, notes }]` array, capped at the box type's `compartments` |
 | `GET` / `PUT` / `DELETE` | `/api/bins/:id` | Single container. `PUT` replaces the items array transactionally when one is supplied; omit it to update bin metadata only |
 | `GET` / `PUT` | `/api/config` | Runtime settings (currently just `qrPayloadMode`) |
+| `GET` / `PUT` | `/api/backup/settings` | Backup interval in days — `PUT` reschedules the running backend immediately |
+| `POST` | `/api/backup/create` | Triggers an on-demand `pg_dump` |
+| `GET` | `/api/export?format=sql\|csv` | Streams a full SQL dump or a flattened one-row-per-item CSV as a download |
+| `POST` | `/api/import` | Body is a raw CSV (matching the export shape) as text — additive only, see [Settings → Database](#database-1) |
 | `GET` | `/bin/:id` | Public scan page (serves the SPA, which renders the detail with every item) |
 
 #### Bin shape
@@ -400,6 +468,19 @@ docker compose exec postgres psql -U gridfinity -d gridfinity
 ### No tests, no linter
 
 This is a hobby project — there's no test suite or eslint config to run. Verify changes by exercising the UI in a browser; the golden paths are: add an undivided bin with one item → save; add a divided 2-comp bin with two items → save → check the inventory shows two rows tagged `#N·A`/`#N·B`; place a bin on the grid → rotate → save; rename a tag and check existing items update; scan a printed QR.
+
+### Regenerating the README screenshots
+
+The images in this README are rendered from the actual running app (not mockups), via a small standalone Playwright script that lives outside `backend/` so it never touches the app's own dependencies:
+
+```bash
+cd Documentation/Scripts
+npm install
+docker compose up -d          # from the repo root, if it isn't already running
+npm run capture                # writes PNGs into ../images
+```
+
+It only reads data through the UI — it never creates, edits, or deletes anything — so it's safe to re-run any time and it'll simply reflect whatever's currently in your database. Override the target with `APP_URL=http://host:port npm run capture` if you're not on the default `http://localhost:3333`.
 
 ---
 
