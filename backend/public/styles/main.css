@@ -681,6 +681,18 @@ table.gf-table tbody tr:hover { background: var(--soft); }
 @media (max-width: 480px) {
   .settings-nav { width: 104px; padding-right: 10px; }
 }
+.settings-nav-divider {
+  height: 1px;
+  background: var(--line-soft);
+  margin: 8px 0;
+}
+.settings-nav-heading {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--mute);
+  padding: 4px 10px 2px;
+}
 
 .menu-items-list { display: flex; flex-direction: column; gap: 6px; }
 .menu-item-row {

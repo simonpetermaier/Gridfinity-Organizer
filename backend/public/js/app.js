@@ -80,7 +80,7 @@ const App = {
     if (m) { await this.loadConfig(); await this.renderBinScan(m[1]); return; }
 
     await Promise.all([
-      this.loadConfig(),
+      this.loadConfig(), this.loadBackupSettings(),
       this.loadLocations(), this.loadBoxTypes(),
       this.loadContentTypes(), this.loadBins(),
     ]);
@@ -101,6 +101,18 @@ const App = {
       if (cfg && cfg.qrPayloadMode) S.qrPayloadMode = cfg.qrPayloadMode;
     } catch (e) {
       console.warn('Config fetch failed; using defaults:', e.message);
+    }
+  },
+
+  // Settings → Database → Backup's interval field. Failures are non-fatal:
+  // the default baked into S (0) just means the field shows "disabled"
+  // until the fetch succeeds.
+  async loadBackupSettings() {
+    try {
+      const r = await api.get('/backup/settings');
+      if (r && Number.isFinite(r.intervalDays)) S.backupIntervalDays = r.intervalDays;
+    } catch (e) {
+      console.warn('Backup settings fetch failed; using defaults:', e.message);
     }
   },
 
@@ -255,6 +267,10 @@ const App = {
     { id: 'appearance', label: 'Appearance' },
     { id: 'menu-items', label: 'Menu Items' },
   ],
+  SETTINGS_DATABASE_PAGES: [
+    { id: 'db-backup',        label: 'Backup' },
+    { id: 'db-export-import', label: 'Export / Import' },
+  ],
 
   showSettings() { this.openModal('Settings', this._settingsBody()); },
 
@@ -264,13 +280,17 @@ const App = {
   },
 
   _settingsBody() {
+    const navItem = p => `
+      <button class="settings-nav-item ${S.settingsTab === p.id ? 'active' : ''}" onclick="App.setSettingsTab('${p.id}')">
+        ${esc(p.label)}
+      </button>`;
     return `
       <div class="settings-layout">
         <nav class="settings-nav">
-          ${this.SETTINGS_PAGES.map(p => `
-            <button class="settings-nav-item ${S.settingsTab === p.id ? 'active' : ''}" onclick="App.setSettingsTab('${p.id}')">
-              ${esc(p.label)}
-            </button>`).join('')}
+          ${this.SETTINGS_PAGES.map(navItem).join('')}
+          <div class="settings-nav-divider"></div>
+          <div class="settings-nav-heading">Database</div>
+          ${this.SETTINGS_DATABASE_PAGES.map(navItem).join('')}
         </nav>
         <div class="settings-page">
           ${this._settingsPage()}
@@ -283,9 +303,11 @@ const App = {
 
   _settingsPage() {
     switch (S.settingsTab) {
-      case 'menu-items': return this._settingsMenuItemsPage();
+      case 'menu-items':       return this._settingsMenuItemsPage();
+      case 'db-backup':        return this._settingsBackupPage();
+      case 'db-export-import': return this._settingsExportImportPage();
       case 'appearance':
-      default:           return this._settingsAppearancePage();
+      default:                 return this._settingsAppearancePage();
     }
   },
 
@@ -336,6 +358,109 @@ const App = {
             </div>
           </div>`).join('')}
       </div>`;
+  },
+
+  _settingsBackupPage() {
+    return `
+      <div class="field-label" style="margin-bottom:10px;">Backup interval (days)</div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <input class="input" type="number" min="0" step="1" style="width:100px;"
+               value="${S.backupIntervalDays}"
+               onchange="App.saveBackupInterval(this.value)">
+        <span class="mute" style="font-size:var(--text-xs);">0 disables automatic backups</span>
+      </div>
+      <p class="mute" style="font-size:var(--text-xs); margin-top:8px;">
+        BACKUP_INTERVAL_DAYS in docker-compose.yml is only the default for a fresh install —
+        changing this here takes effect immediately and persists across restarts.
+      </p>
+
+      <div style="margin-top:24px; padding-top:20px; border-top:1px solid var(--line-soft);">
+        <div class="field-label" style="margin-bottom:10px;">Manual backup</div>
+        <button class="btn btn-secondary" onclick="App.createBackupNow()">Create Backup</button>
+      </div>`;
+  },
+
+  async saveBackupInterval(value) {
+    const days = parseInt(value, 10);
+    if (!Number.isFinite(days) || days < 0) {
+      alert('Enter a non-negative number of days.');
+      this._refreshSettings();
+      return;
+    }
+    try {
+      const r = await api.put('/backup/settings', { intervalDays: days });
+      S.backupIntervalDays = r.intervalDays;
+      toast(r.intervalDays === 0
+        ? 'Automatic backups disabled'
+        : `Backup interval set to ${r.intervalDays} day${r.intervalDays === 1 ? '' : 's'}`);
+    } catch (e) {
+      alert('Failed to update backup interval: ' + e.message);
+    }
+    this._refreshSettings();
+  },
+
+  async createBackupNow() {
+    try {
+      const r = await api.post('/backup/create');
+      toast(`Backup created: ${r.file}`);
+    } catch (e) {
+      alert('Backup failed: ' + e.message);
+    }
+  },
+
+  _settingsExportImportPage() {
+    const fmtBtn = (id, label) => `
+      <button class="pill ${S.exportFormat === id ? 'active' : ''}" onclick="App.setExportFormat('${id}')">${label}</button>`;
+    return `
+      <div class="field-label" style="margin-bottom:10px;">Export format</div>
+      <div style="display:flex; gap:8px; margin-bottom:16px;">
+        ${fmtBtn('sql', 'SQL (full backup)')}
+        ${fmtBtn('csv', 'CSV (spreadsheet)')}
+      </div>
+      <button class="btn btn-secondary" onclick="App.exportDatabase()">Export</button>
+
+      <div style="margin-top:24px; padding-top:20px; border-top:1px solid var(--line-soft);">
+        <div class="field-label" style="margin-bottom:6px;">Import</div>
+        <p class="mute" style="font-size:var(--text-xs); margin:0 0 10px;">
+          Imports a CSV in the same shape as the export above. This only adds new bins/items —
+          existing data is never changed or removed. Rows naming an unknown drawer or box type are skipped.
+        </p>
+        <input type="file" id="import-file-input" accept=".csv,text/csv" style="display:none;"
+               onchange="App.importDatabase(this.files[0])">
+        <button class="btn btn-secondary" onclick="$('import-file-input').click()">Import…</button>
+      </div>`;
+  },
+
+  setExportFormat(fmt) {
+    S.exportFormat = fmt;
+    this._refreshSettings();
+  },
+
+  exportDatabase() {
+    window.location.href = '/api/export?format=' + encodeURIComponent(S.exportFormat);
+  },
+
+  async importDatabase(file) {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const r = await fetch('/api/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/csv' },
+        body: text,
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || r.statusText);
+
+      await Promise.all([this.loadLocations(), this.loadBoxTypes(), this.loadContentTypes(), this.loadBins()]);
+      this._refreshSettings();
+
+      const skippedMsg = data.skipped.length ? `, ${data.skipped.length} skipped` : '';
+      toast(`Imported ${data.imported} item${data.imported === 1 ? '' : 's'}${skippedMsg}`);
+      if (data.skipped.length) console.warn('Import skipped rows:', data.skipped);
+    } catch (e) {
+      alert('Import failed: ' + e.message);
+    }
   },
 
   // ── Modal helpers ────────────────────────────────────────────

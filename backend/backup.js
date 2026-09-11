@@ -137,8 +137,9 @@ async function restoreIfRequested() {
   writeMarker(RESTORE_FROM);
 }
 
-// Phase 2 of boot: a fresh dump that reflects the current schema state, plus
-// the recurring schedule if BACKUP_INTERVAL_DAYS > 0.
+// Phase 2 of boot: a fresh dump that reflects the current schema state.
+// The recurring schedule itself is started separately via scheduleBackups()
+// once server.js has read the persisted interval from app_settings.
 async function initBackupSchedule() {
   try {
     await runBackup('startup');
@@ -146,21 +147,38 @@ async function initBackupSchedule() {
   } catch (e) {
     console.error('[backup] startup backup failed:', e.message);
   }
-  if (BACKUP_INTERVAL_DAYS > 0) {
-    const ms = BACKUP_INTERVAL_DAYS * 24 * 60 * 60 * 1000;
-    setInterval(async () => {
+}
+
+// (Re)schedules the recurring dump at `days` intervals; 0 disables it.
+// Safe to call repeatedly — e.g. every time the UI changes the interval —
+// since it clears any previously running timer first. Runs entirely
+// in-process, so it takes effect immediately without a container restart.
+let scheduleHandle = null;
+let currentIntervalDays = BACKUP_INTERVAL_DAYS;
+
+function scheduleBackups(days) {
+  const n = Number.isFinite(Number(days)) ? Math.max(0, Math.trunc(Number(days))) : 0;
+  if (scheduleHandle) { clearInterval(scheduleHandle); scheduleHandle = null; }
+  currentIntervalDays = n;
+  if (n > 0) {
+    const ms = n * 24 * 60 * 60 * 1000;
+    scheduleHandle = setInterval(async () => {
       try { await runBackup('scheduled'); prune(); }
       catch (e) { console.error('[backup] scheduled backup failed:', e.message); }
     }, ms).unref(); // don't keep the event loop alive just for backups
-    console.log(`[backup] scheduled every ${BACKUP_INTERVAL_DAYS}d, retaining newest ${BACKUP_RETAIN}`);
+    console.log(`[backup] scheduled every ${n}d, retaining newest ${BACKUP_RETAIN}`);
   } else {
-    console.log('[backup] periodic backups disabled (BACKUP_INTERVAL_DAYS=0)');
+    console.log('[backup] periodic backups disabled (interval=0)');
   }
 }
+
+function getIntervalDays() { return currentIntervalDays; }
 
 module.exports = {
   restoreIfRequested,
   initBackupSchedule,
+  scheduleBackups,
+  getIntervalDays,
   runBackup,
   runRestore,
   prune,
