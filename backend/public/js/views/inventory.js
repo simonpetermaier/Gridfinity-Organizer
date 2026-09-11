@@ -11,17 +11,24 @@ Object.assign(App, {
     const sel = filteredBins.find(b => b.id === S.selectedBinId);
 
     // Explode bins into (bin, item) pairs, then optionally narrow by
-    // typeFilter on the item's content_type. Bins with no items still get
-    // one placeholder row so empty containers stay discoverable — unless
-    // a typeFilter is active, in which case they're irrelevant.
+    // typeFilter on the item's content_type and by the topbar quick-filter
+    // (matched against content type / attribute / notes). Bins with no
+    // items still get one placeholder row so empty containers stay
+    // discoverable — unless a filter is active, in which case they're
+    // irrelevant.
+    const q = S.quickFilter.trim().toLowerCase();
     const rows = [];
     for (const b of filteredBins) {
       const items = b.items || [];
       if (items.length === 0) {
-        if (!S.typeFilter) rows.push({ b, item: null });
+        if (!S.typeFilter && !q) rows.push({ b, item: null });
       } else {
         for (const item of items) {
           if (S.typeFilter && item.content_type !== S.typeFilter) continue;
+          if (q) {
+            const hay = `${item.content_type || ''} ${item.attribute || ''} ${item.notes || ''}`.toLowerCase();
+            if (!hay.includes(q)) continue;
+          }
           rows.push({ b, item });
         }
       }

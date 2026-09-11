@@ -116,9 +116,31 @@ const App = {
         ${this.renderSidebar()}
         <div class="main">
           ${this.renderTopbar()}
-          <div class="page">${this.renderTab()}</div>
+          <div class="page" id="page-content">${this.renderTab()}</div>
         </div>
       </div>`;
+  },
+
+  // Re-renders only the current tab's content, leaving the topbar (and the
+  // quick-filter input's focus/cursor) untouched — used on every keystroke
+  // in the quick-filter box, where a full render() would steal focus.
+  refreshPage() {
+    const el = $('page-content');
+    if (el) el.innerHTML = this.renderTab();
+  },
+
+  setQuickFilter(v) {
+    S.quickFilter = v;
+    this.refreshPage();
+  },
+
+  // Used by the clear (×) button rather than setQuickFilter: a full render()
+  // is safe here (focus already left the input when the button was
+  // clicked) and it's needed to update the input's displayed value and
+  // swap the clear button back out for the "/" hint.
+  clearQuickFilter() {
+    S.quickFilter = '';
+    this.render();
   },
 
   renderSidebar() {
@@ -167,11 +189,15 @@ const App = {
           <span class="crumb current">${TAB_TITLE[S.tab] || ''}</span>
         </div>
         <div class="topbar-spacer"></div>
-        <button class="qf-pill" onclick="App.switchTab('search')" aria-label="Jump to search">
+        <div class="qf-pill">
           ${icon('search', 14)}
-          <span class="qf-text">Jump to a bin, drawer, or type…</span>
-          <span class="kbd">/</span>
-        </button>
+          <input class="qf-text" type="text" placeholder="Filter this page…"
+                 value="${esc(S.quickFilter)}" oninput="App.setQuickFilter(this.value)"
+                 aria-label="Filter items on this page">
+          ${S.quickFilter
+            ? `<button class="qf-clear" onclick="App.clearQuickFilter()" aria-label="Clear filter">${icon('close', 12)}</button>`
+            : `<span class="kbd">/</span>`}
+        </div>
         ${isMobile() ? `<button class="icon-btn topbar-settings-btn" onclick="App.showSettings()" aria-label="Settings">${icon('settings', 18)}</button>` : ''}
         ${action || ''}
       </header>`;

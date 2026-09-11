@@ -62,6 +62,7 @@ const S = {
   ctFilter:      'all',         // all | inuse  — content-types view
   searchQ:       '',
   searchResults: [],
+  quickFilter:   '',            // topbar quick-filter — narrows whatever list is on the current tab
   formItems:     [],            // draft items inside the bin form modal
   // grid picker state (shared for add/edit bin modals)
   grid: {
