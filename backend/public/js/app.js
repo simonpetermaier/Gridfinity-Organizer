@@ -35,6 +35,11 @@ const App = {
       this.loadContentTypes(), this.loadBins(),
     ]);
     this.render();
+
+    // Some views (inventory) restructure their DOM rather than just their
+    // CSS between phone and tablet/desktop — re-render on crossing that
+    // breakpoint so resizing/rotating doesn't leave a stale layout.
+    window.matchMedia('(max-width: 768px)').addEventListener('change', () => this.render());
   },
 
   // Tiny client-config fetch — currently just qrPayloadMode but a stable

@@ -19,6 +19,13 @@ function esc(s) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// True at the same ≤768px breakpoint the "Mobile layout" block in
+// main.css switches on. Used by views that need to change DOM structure
+// (not just CSS) between phone and tablet/desktop.
+function isMobile() {
+  return window.matchMedia('(max-width: 768px)').matches;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // API CLIENT
 // ═══════════════════════════════════════════════════════════════

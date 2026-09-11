@@ -929,6 +929,25 @@ table.gf-table tbody tr:hover { background: var(--soft); }
   .inv-detail .meta-grid { grid-template-columns: 1fr; }
   .inv-detail .contents { font-size: 22px; word-break: break-word; }
 
+  /* Phone only: tapping a row splits the table open right there instead
+     of showing detail in a side panel (there's no room for one). */
+  .inv-row-detail {
+    background: var(--soft);
+    border-top: 1px solid var(--line-soft);
+    border-bottom: 2px solid var(--accent);
+    padding: 16px 12px;
+  }
+
+  /* The grid-position mini-map uses a fixed pixel cell size so it stays
+     legible on desktop; on phone that can be wider than the viewport
+     (e.g. a 10-column drawer), which forces the whole page to zoom out.
+     Scale the SVG down to the available width instead — the viewBox
+     keeps it proportional. */
+  .inv-minimap svg {
+    width: 100%;
+    height: auto;
+  }
+
   /* Drawers cabinet grid: 1 col. MiniGrid SVG scales fluidly via
      the viewBox we set, capped at 160px so the meta column survives. */
   .cabinet-grid { grid-template-columns: 1fr; gap: 12px; }

@@ -53,10 +53,11 @@ Object.assign(App, {
             <div>Location</div>
             <div></div>
           </div>
-          ${rows.length ? rows.map(r => this._invRow(r.b, r.item)).join('') :
+          ${rows.length ? this._invRowsHtml(rows, sel) :
             `<div class="inv-row empty">No items match the current filters.</div>`}
         </div>
 
+        ${isMobile() ? '' : `
         <div class="inv-right">
           <div class="card inv-detail">
             ${sel ? this._invDetail(sel) :
@@ -67,6 +68,35 @@ Object.assign(App, {
             <div class="caps" style="margin-bottom:8px;">Grid position</div>
             ${this._invGridMap(sel)}
           </div>
+        </div>`}
+      </div>`;
+  },
+
+  // Desktop/tablet: plain row list, detail shown separately in .inv-right.
+  // Phone (≤768px): the detail + grid-position card are spliced into the
+  // table right after the selected bin's row(s), splitting the list open
+  // instead of pushing detail into a side panel that doesn't fit.
+  _invRowsHtml(rows, sel) {
+    const mobile = isMobile();
+    if (!mobile || !sel) return rows.map(r => this._invRow(r.b, r.item)).join('');
+
+    let html = '';
+    rows.forEach((r, i) => {
+      html += this._invRow(r.b, r.item);
+      const next = rows[i + 1];
+      const isLastRowOfSelectedBin = r.b.id === sel.id && (!next || next.b.id !== sel.id);
+      if (isLastRowOfSelectedBin) html += this._invMobileDetail(sel);
+    });
+    return html;
+  },
+
+  _invMobileDetail(bin) {
+    return `
+      <div class="inv-row-detail inv-detail">
+        ${this._invDetail(bin)}
+        <div class="card" style="margin-top:12px;">
+          <div class="caps" style="margin-bottom:8px;">Grid position</div>
+          ${this._invGridMap(bin)}
         </div>
       </div>`;
   },
@@ -98,7 +128,28 @@ Object.assign(App, {
     return bins;
   },
 
-  _selectBin(id) { S.selectedBinId = id; this.render(); },
+  // On phone, selecting a row splices detail content into the table right
+  // there (see _invRowsHtml), which can insert/remove a large block above
+  // the tapped row and shove it around on screen. Anchor on the tapped
+  // row's on-screen position before re-rendering and correct the scroll
+  // afterwards so it stays put instead of jumping under your thumb.
+  _selectBin(id, rowEl) {
+    const anchor = (isMobile() && rowEl) ? {
+      bin: rowEl.dataset.bin, slot: rowEl.dataset.slot,
+      top: rowEl.getBoundingClientRect().top,
+    } : null;
+
+    S.selectedBinId = id;
+    this.render();
+
+    if (anchor) {
+      const again = document.querySelector(`.inv-row[data-bin="${anchor.bin}"][data-slot="${anchor.slot}"]`);
+      if (again) {
+        const delta = again.getBoundingClientRect().top - anchor.top;
+        if (delta) window.scrollBy(0, delta);
+      }
+    }
+  },
 
   _locFilterChips() {
     return S.locations.map(l => {
@@ -136,7 +187,7 @@ Object.assign(App, {
       ? (ctype || '—')
       : '<span class="mute">— empty —</span>';
     return `
-      <div class="inv-row ${selected ? 'selected' : ''}" onclick="App._selectBin(${b.id})">
+      <div class="inv-row ${selected ? 'selected' : ''}" data-bin="${b.id}" data-slot="${item ? item.slot : ''}" onclick="App._selectBin(${b.id}, this)">
         <div class="bin-id mono">${idLabel}</div>
         <div class="two-line">
           <div class="top" style="display:flex; align-items:center; gap:6px;">
