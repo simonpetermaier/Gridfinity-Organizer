@@ -1,0 +1,11 @@
+{
+  "name": "gridfinity-docs-screenshots",
+  "private": true,
+  "description": "Standalone tool that renders the running Gridfinity Organizer UI to PNGs for the README. Not part of the app itself — has its own package.json so Playwright never touches backend/package.json.",
+  "scripts": {
+    "capture": "node capture-screenshots.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.47.0"
+  }
+}
