@@ -3,19 +3,25 @@
 Object.assign(App, {
 
   renderBoxTypes() {
+    // Topbar quick-filter narrows by name or description.
+    const q = S.quickFilter.trim().toLowerCase();
+    const list = q
+      ? S.boxTypes.filter(bt => `${bt.name} ${bt.description || ''}`.toLowerCase().includes(q))
+      : S.boxTypes;
+
     return `
       <div class="page-header">
         <h1 class="page-title">Box Types</h1>
-        <span class="count-chip">${S.boxTypes.length} types</span>
+        <span class="count-chip">${list.length} types</span>
       </div>
 
-      ${S.boxTypes.length ? `
+      ${list.length ? `
         <div class="box-gallery">
-          ${S.boxTypes.map(bt => this._boxCard(bt)).join('')}
+          ${list.map(bt => this._boxCard(bt)).join('')}
         </div>
       ` : `
         <div class="card" style="text-align:center; padding:48px 16px;">
-          <div class="mute">No box types yet. Add one from the top right.</div>
+          <div class="mute">${q ? 'Nothing matches your filter.' : 'No box types yet. Add one from the top right.'}</div>
         </div>`}
     `;
   },

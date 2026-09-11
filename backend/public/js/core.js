@@ -19,6 +19,13 @@ function esc(s) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// True at the same ≤768px breakpoint the "Mobile layout" block in
+// main.css switches on. Used by views that need to change DOM structure
+// (not just CSS) between phone and tablet/desktop.
+function isMobile() {
+  return window.matchMedia('(max-width: 768px)').matches;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // API CLIENT
 // ═══════════════════════════════════════════════════════════════
@@ -42,6 +49,7 @@ const api = {
 // ═══════════════════════════════════════════════════════════════
 const S = {
   tab:           'inventory',   // inventory | locations | box-types | content-types | search | scanner
+  settingsTab:   'appearance',  // appearance | menu-items — active page inside the Settings modal
   qrPayloadMode: 'url',         // 'url' = host-coupled URL · 'id' = host-portable gfbin:N
   theme:         'light',       // light | dark — kept in sync with <html data-theme>
   selectedBinId: null,          // for the inventory split view
@@ -54,6 +62,9 @@ const S = {
   ctFilter:      'all',         // all | inuse  — content-types view
   searchQ:       '',
   searchResults: [],
+  quickFilter:   '',            // topbar quick-filter — narrows whatever list is on the current tab
+  backupIntervalDays: 0,        // Settings → Database → Backup — loaded from /api/backup/settings at boot
+  exportFormat:  'sql',         // Settings → Database → Export/Import — 'sql' | 'csv'
   formItems:     [],            // draft items inside the bin form modal
   // grid picker state (shared for add/edit bin modals)
   grid: {

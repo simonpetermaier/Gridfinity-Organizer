@@ -4,7 +4,11 @@ const express = require('express');
 const { Pool }  = require('pg');
 const cors      = require('cors');
 const path      = require('path');
-const { restoreIfRequested, initBackupSchedule } = require('./backup');
+const { spawn } = require('child_process');
+const {
+  restoreIfRequested, initBackupSchedule, scheduleBackups,
+  runBackup, prune,
+} = require('./backup');
 
 const app  = express();
 const pool = new Pool({
@@ -23,6 +27,39 @@ app.use(express.static(path.join(__dirname, 'public')));
 function ok(res, data)  { res.json(data); }
 function err(res, e)    { console.error(e); res.status(500).json({ error: e.message }); }
 function notFound(res)  { res.status(404).json({ error: 'Not found' }); }
+
+// ── CSV helpers (used by /api/export?format=csv and /api/import) ──────
+function csvEscape(v) {
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+// Minimal RFC4180-ish parser: quoted fields, doubled-quote escaping, and
+// either \n or \r\n line endings. Returns an array of {header: value} objects.
+function parseCsv(text) {
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  const pushField = () => { row.push(field); field = ''; };
+  const pushRow = () => { pushField(); rows.push(row); row = []; };
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQuotes = false; }
+      else field += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ',') pushField();
+    else if (c === '\r') { /* swallow, \n follows */ }
+    else if (c === '\n') pushRow();
+    else field += c;
+  }
+  if (field.length || row.length) pushRow();
+  if (!rows.length) return [];
+  const header = rows[0].map(h => h.trim());
+  return rows.slice(1)
+    .filter(r => r.length > 1 || r[0] !== '')
+    .map(r => Object.fromEntries(header.map((h, idx) => [h, (r[idx] ?? '').trim()])));
+}
 
 // Idempotent schema upgrade for existing DBs (init.sql only runs on a fresh
 // volume). Creates new tables if missing and seeds them only when empty —
@@ -45,6 +82,18 @@ async function ensureSchema() {
     `INSERT INTO app_settings (key, value) VALUES ('qr_payload_mode', $1)
        ON CONFLICT (key) DO NOTHING`,
     [seedMode]
+  );
+
+  // Same pattern for the backup interval: BACKUP_INTERVAL_DAYS only seeds
+  // app_settings on first boot. After that, the DB row wins — see
+  // scheduleBackups() in backup.js for how the UI's changes take effect
+  // without a restart.
+  const envInterval = parseInt(process.env.BACKUP_INTERVAL_DAYS, 10);
+  const seedInterval = Number.isFinite(envInterval) && envInterval >= 0 ? envInterval : 0;
+  await pool.query(
+    `INSERT INTO app_settings (key, value) VALUES ('backup_interval_days', $1)
+       ON CONFLICT (key) DO NOTHING`,
+    [String(seedInterval)]
   );
 
   await pool.query(`
@@ -553,6 +602,177 @@ app.put('/api/config', async (req, res) => {
   } catch (e) { err(res, e); }
 });
 
+// ============================================================
+// DATABASE — backup schedule + manual backup, and export/import.
+// ============================================================
+
+// Backup interval, persisted the same way as qr_payload_mode above.
+// Changing it reschedules backup.js's timer immediately in-process —
+// no container restart needed (see scheduleBackups() in backup.js).
+app.get('/api/backup/settings', async (_req, res) => {
+  try {
+    const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'backup_interval_days'`);
+    const intervalDays = r.rows[0] ? parseInt(r.rows[0].value, 10) : 0;
+    ok(res, { intervalDays: Number.isFinite(intervalDays) ? intervalDays : 0 });
+  } catch (e) { err(res, e); }
+});
+
+app.put('/api/backup/settings', async (req, res) => {
+  const intervalDays = parseInt(req.body?.intervalDays, 10);
+  if (!Number.isFinite(intervalDays) || intervalDays < 0) {
+    return res.status(400).json({ error: 'intervalDays must be a non-negative integer' });
+  }
+  try {
+    await pool.query(
+      `INSERT INTO app_settings (key, value) VALUES ('backup_interval_days', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [String(intervalDays)]
+    );
+    scheduleBackups(intervalDays);
+    ok(res, { intervalDays });
+  } catch (e) { err(res, e); }
+});
+
+app.post('/api/backup/create', async (_req, res) => {
+  try {
+    const file = await runBackup('manual');
+    prune();
+    ok(res, { success: true, file: path.basename(file) });
+  } catch (e) { err(res, e); }
+});
+
+// Export: SQL is a full pg_dump streamed straight to the response (the
+// same shape as the on-disk backups, minus the disk round-trip). CSV is a
+// flattened one-row-per-item sheet — spreadsheet-friendly, not a full
+// schema dump — matched by /api/import below.
+app.get('/api/export', async (req, res) => {
+  const format = (req.query.format || 'sql').toLowerCase();
+  const stamp = new Date().toISOString().replace(/\..*$/, 'Z').replace(/:/g, '-');
+
+  if (format === 'sql') {
+    res.setHeader('Content-Type', 'application/sql');
+    res.setHeader('Content-Disposition', `attachment; filename="gridfinity-export-${stamp}.sql"`);
+    const proc = spawn('pg_dump', [
+      '-h', process.env.DB_HOST || 'postgres',
+      '-p', String(process.env.DB_PORT || 5432),
+      '-U', process.env.DB_USER || 'gridfinity',
+      '-d', process.env.DB_NAME || 'gridfinity',
+      '--no-owner', '--no-acl', '--clean', '--if-exists',
+    ], { env: { ...process.env, PGPASSWORD: process.env.DB_PASSWORD || '' } });
+    proc.stdout.pipe(res);
+    proc.stderr.on('data', d => console.error('[export] pg_dump:', d.toString().trim()));
+    proc.on('error', e => { if (!res.headersSent) err(res, e); });
+    return;
+  }
+
+  if (format === 'csv') {
+    try {
+      const r = await pool.query(`
+        SELECT b.id AS bin_id, bt.name AS box_type, l.cabinet_id AS cabinet, l.drawer_id AS drawer,
+               b.grid_x, b.grid_y, bi.slot, ct.name AS content_type, bi.attribute, bi.notes
+        FROM bin_items bi
+        JOIN bins b            ON b.id = bi.bin_id
+        LEFT JOIN box_types bt ON bt.id = b.box_type_id
+        LEFT JOIN locations l  ON l.id = b.location_id
+        LEFT JOIN content_types ct ON ct.id = bi.content_type_id
+        ORDER BY b.id, bi.slot
+      `);
+      const header = ['bin_id', 'box_type', 'cabinet', 'drawer', 'grid_x', 'grid_y', 'slot', 'content_type', 'attribute', 'notes'];
+      const lines = [header.join(',')];
+      for (const row of r.rows) lines.push(header.map(h => csvEscape(row[h])).join(','));
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="gridfinity-export-${stamp}.csv"`);
+      res.send(lines.join('\n'));
+    } catch (e) { err(res, e); }
+    return;
+  }
+
+  res.status(400).json({ error: 'format must be "sql" or "csv"' });
+});
+
+// Import: additive only — never updates or deletes existing rows. Each CSV
+// row (matching the export shape above) creates one new bin + item. A row
+// is skipped (not guessed at) when its box type or drawer doesn't already
+// exist, and a bin is placed unplaced (no grid position) rather than
+// overwriting another bin if its recorded position is already occupied.
+// Accepts the raw CSV as the request body (any content-type — the frontend
+// sends it as plain text from a File, not multipart).
+app.post('/api/import', express.text({ type: '*/*', limit: '20mb' }), async (req, res) => {
+  const csv = typeof req.body === 'string' ? req.body : '';
+  if (!csv.trim()) return res.status(400).json({ error: 'Empty CSV body' });
+
+  const client = await pool.connect();
+  try {
+    const rows = parseCsv(csv);
+    let imported = 0;
+    const skipped = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const lineNo = i + 2; // header is line 1
+      const boxTypeName = row.box_type || '';
+      const cabinet = row.cabinet || '';
+      const drawer = row.drawer || '';
+      if (!boxTypeName || !cabinet || !drawer) {
+        skipped.push({ line: lineNo, reason: 'missing box_type, cabinet, or drawer' });
+        continue;
+      }
+
+      const bt = await client.query('SELECT * FROM box_types WHERE name = $1', [boxTypeName]);
+      if (!bt.rows.length) {
+        skipped.push({ line: lineNo, reason: `unknown box type "${boxTypeName}"` });
+        continue;
+      }
+      const boxType = bt.rows[0];
+
+      const loc = await client.query(
+        'SELECT * FROM locations WHERE cabinet_id = $1 AND drawer_id = $2', [cabinet, drawer]
+      );
+      if (!loc.rows.length) {
+        skipped.push({ line: lineNo, reason: `unknown drawer "${cabinet} / ${drawer}"` });
+        continue;
+      }
+      const location = loc.rows[0];
+
+      let gx = row.grid_x !== '' ? parseInt(row.grid_x, 10) : null;
+      let gy = row.grid_y !== '' ? parseInt(row.grid_y, 10) : null;
+      if (!Number.isFinite(gx) || !Number.isFinite(gy)) { gx = null; gy = null; }
+
+      if (gx != null && gy != null) {
+        // Never overwrite/collide with an existing bin — fall back to
+        // unplaced instead, so an import can only add, never disturb.
+        const existing = await client.query(
+          'SELECT grid_x, grid_y, grid_width, grid_length FROM bins WHERE location_id = $1 AND grid_x IS NOT NULL',
+          [location.id]
+        );
+        const collides = existing.rows.some(b =>
+          gx < b.grid_x + b.grid_width && gx + boxType.grid_width > b.grid_x &&
+          gy < b.grid_y + b.grid_length && gy + boxType.grid_length > b.grid_y
+        );
+        if (collides) { gx = null; gy = null; }
+      }
+
+      const binIns = await client.query(
+        `INSERT INTO bins (location_id, grid_x, grid_y, grid_width, grid_length, height_u, box_type_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+        [location.id, gx, gy, boxType.grid_width, boxType.grid_length, boxType.grid_height_u, boxType.id]
+      );
+      const binId = binIns.rows[0].id;
+
+      const contentTypeId = row.content_type ? await resolveContentTypeId(client, row.content_type) : null;
+      const slot = row.slot !== '' && Number.isFinite(parseInt(row.slot, 10)) ? parseInt(row.slot, 10) : 0;
+      await client.query(
+        `INSERT INTO bin_items (bin_id, slot, content_type_id, attribute, notes) VALUES ($1,$2,$3,$4,$5)`,
+        [binId, slot, contentTypeId, row.attribute || null, row.notes || null]
+      );
+      imported++;
+    }
+
+    ok(res, { imported, skipped });
+  } catch (e) { err(res, e); }
+  finally { client.release(); }
+});
+
 // ── SPA catch-all ─────────────────────────────────────────────
 app.get('*', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -560,10 +780,16 @@ app.get('*', (_req, res) => {
 
 const PORT = parseInt(process.env.PORT || '3000');
 // Boot order: restore (one-shot, if RESTORE_FROM set) → schema migrations →
-// startup dump + schedule → listen. Any failure aborts so the container
-// doesn't serve traffic against a half-initialised DB.
+// startup dump → read the persisted interval and start the recurring
+// schedule → listen. Any failure aborts so the container doesn't serve
+// traffic against a half-initialised DB.
 restoreIfRequested()
   .then(() => ensureSchema())
   .then(() => initBackupSchedule())
+  .then(async () => {
+    const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'backup_interval_days'`);
+    const days = r.rows[0] ? parseInt(r.rows[0].value, 10) : 0;
+    scheduleBackups(Number.isFinite(days) ? days : 0);
+  })
   .then(() => app.listen(PORT, () => console.log(`Gridfinity Organizer → http://localhost:${PORT}`)))
   .catch(e => { console.error('Startup failed:', e); process.exit(1); });

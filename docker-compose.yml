@@ -34,7 +34,10 @@ services:
       QR_PAYLOAD_MODE: ${QR_PAYLOAD_MODE:-url}
       # Backup / restore configuration — see backend/backup.js for details.
       BACKUP_DIR: /backups
-      BACKUP_INTERVAL_DAYS: 7    # 0 disables the recurring dump
+      # Seeds app_settings on first boot only — same pattern as QR_PAYLOAD_MODE.
+      # After that, Settings → Database → Backup in the UI is the source of
+      # truth; changing it there takes effect immediately, no restart needed.
+      BACKUP_INTERVAL_DAYS: ${BACKUP_INTERVAL_DAYS:-7}    # 0 disables the recurring dump
       BACKUP_RETAIN: 5           # max number of dumps kept
       # Restore by setting on the command line:
       #   RESTORE_FROM=gridfinity-2026-05-15T18-30-45Z.sql docker compose up -d backend

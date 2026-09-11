@@ -18,6 +18,56 @@ const TAB_TITLE = {
   'scanner':       'Scan',
 };
 
+// Per-browser sidebar customization (order + on/off) — same persistence
+// pattern as Theme (localStorage, no server round-trip). Stored as an
+// ordered [{id, hidden}] list; NAV stays the source of truth for
+// label/icon so a future NAV addition just appears (visible, at the end)
+// without needing a migration.
+const MenuItems = {
+  STORAGE_KEY: 'gridfinity:menuItems',
+
+  load() {
+    try {
+      const raw = localStorage.getItem(this.STORAGE_KEY);
+      const parsed = raw && JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : null;
+    } catch { return null; }
+  },
+  save(list) {
+    try { localStorage.setItem(this.STORAGE_KEY, JSON.stringify(list)); } catch {}
+  },
+
+  // Full list (visible + hidden) in display order, NAV's label/icon merged in.
+  list() {
+    const saved = this.load();
+    if (!saved) return NAV.map(n => ({ ...n, hidden: false }));
+    const byId = Object.fromEntries(NAV.map(n => [n.id, n]));
+    const seen = new Set();
+    const result = [];
+    for (const s of saved) {
+      const n = byId[s.id];
+      if (!n) continue; // stale id (e.g. removed tab) — drop it
+      result.push({ ...n, hidden: !!s.hidden });
+      seen.add(s.id);
+    }
+    for (const n of NAV) if (!seen.has(n.id)) result.push({ ...n, hidden: false });
+    return result;
+  },
+  visible() { return this.list().filter(n => !n.hidden); },
+
+  toggle(id) {
+    this.save(this.list().map(n => n.id === id ? { id: n.id, hidden: !n.hidden } : { id: n.id, hidden: n.hidden }));
+  },
+  move(id, dir) {
+    const list = this.list();
+    const i = list.findIndex(n => n.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    this.save(list.map(({ id, hidden }) => ({ id, hidden })));
+  },
+};
+
 const App = {
 
   async init() {
@@ -30,11 +80,16 @@ const App = {
     if (m) { await this.loadConfig(); await this.renderBinScan(m[1]); return; }
 
     await Promise.all([
-      this.loadConfig(),
+      this.loadConfig(), this.loadBackupSettings(),
       this.loadLocations(), this.loadBoxTypes(),
       this.loadContentTypes(), this.loadBins(),
     ]);
     this.render();
+
+    // Some views (inventory) restructure their DOM rather than just their
+    // CSS between phone and tablet/desktop — re-render on crossing that
+    // breakpoint so resizing/rotating doesn't leave a stale layout.
+    window.matchMedia('(max-width: 768px)').addEventListener('change', () => this.render());
   },
 
   // Tiny client-config fetch — currently just qrPayloadMode but a stable
@@ -46,6 +101,18 @@ const App = {
       if (cfg && cfg.qrPayloadMode) S.qrPayloadMode = cfg.qrPayloadMode;
     } catch (e) {
       console.warn('Config fetch failed; using defaults:', e.message);
+    }
+  },
+
+  // Settings → Database → Backup's interval field. Failures are non-fatal:
+  // the default baked into S (0) just means the field shows "disabled"
+  // until the fetch succeeds.
+  async loadBackupSettings() {
+    try {
+      const r = await api.get('/backup/settings');
+      if (r && Number.isFinite(r.intervalDays)) S.backupIntervalDays = r.intervalDays;
+    } catch (e) {
+      console.warn('Backup settings fetch failed; using defaults:', e.message);
     }
   },
 
@@ -61,9 +128,31 @@ const App = {
         ${this.renderSidebar()}
         <div class="main">
           ${this.renderTopbar()}
-          <div class="page">${this.renderTab()}</div>
+          <div class="page" id="page-content">${this.renderTab()}</div>
         </div>
       </div>`;
+  },
+
+  // Re-renders only the current tab's content, leaving the topbar (and the
+  // quick-filter input's focus/cursor) untouched — used on every keystroke
+  // in the quick-filter box, where a full render() would steal focus.
+  refreshPage() {
+    const el = $('page-content');
+    if (el) el.innerHTML = this.renderTab();
+  },
+
+  setQuickFilter(v) {
+    S.quickFilter = v;
+    this.refreshPage();
+  },
+
+  // Used by the clear (×) button rather than setQuickFilter: a full render()
+  // is safe here (focus already left the input when the button was
+  // clicked) and it's needed to update the input's displayed value and
+  // swap the clear button back out for the "/" hint.
+  clearQuickFilter() {
+    S.quickFilter = '';
+    this.render();
   },
 
   renderSidebar() {
@@ -77,7 +166,7 @@ const App = {
           </div>
         </div>
         <nav>
-          ${NAV.map(n => `
+          ${MenuItems.visible().map(n => `
             <button class="nav-item ${S.tab === n.id ? 'active' : ''}"
                     onclick="App.switchTab('${n.id}')"
                     ${S.tab === n.id ? 'aria-current="page"' : ''}>
@@ -86,6 +175,10 @@ const App = {
             </button>`).join('')}
         </nav>
         <div class="sidebar-spacer"></div>
+        <button class="nav-item settings-btn" onclick="App.showSettings()" aria-label="Settings">
+          <span class="nav-ico">${icon('settings', 16)}</span>
+          <span>Settings</span>
+        </button>
         <div class="sidebar-stats">
           <div class="sidebar-stats-label">This workspace</div>
           <div class="sidebar-stats-value">${S.bins.length} bins · ${S.locations.length} drawers</div>
@@ -108,11 +201,16 @@ const App = {
           <span class="crumb current">${TAB_TITLE[S.tab] || ''}</span>
         </div>
         <div class="topbar-spacer"></div>
-        <button class="qf-pill" onclick="App.switchTab('search')" aria-label="Jump to search">
+        <div class="qf-pill">
           ${icon('search', 14)}
-          <span class="qf-text">Jump to a bin, drawer, or type…</span>
-          <span class="kbd">/</span>
-        </button>
+          <input class="qf-text" type="text" placeholder="Filter this page…"
+                 value="${esc(S.quickFilter)}" oninput="App.setQuickFilter(this.value)"
+                 aria-label="Filter items on this page">
+          ${S.quickFilter
+            ? `<button class="qf-clear" onclick="App.clearQuickFilter()" aria-label="Clear filter">${icon('close', 12)}</button>`
+            : `<span class="kbd">/</span>`}
+        </div>
+        ${isMobile() ? `<button class="icon-btn topbar-settings-btn" onclick="App.showSettings()" aria-label="Settings">${icon('settings', 18)}</button>` : ''}
         ${action || ''}
       </header>`;
   },
@@ -162,6 +260,206 @@ const App = {
       toast(`QR mode set to ${mode === 'id' ? 'gfbin:N (host-portable)' : 'Full URL'}`);
     } catch (e) {
       alert('Failed to update QR mode: ' + e.message);
+    }
+  },
+
+  SETTINGS_PAGES: [
+    { id: 'appearance', label: 'Appearance' },
+    { id: 'menu-items', label: 'Menu Items' },
+  ],
+  SETTINGS_DATABASE_PAGES: [
+    { id: 'db-backup',        label: 'Backup' },
+    { id: 'db-export-import', label: 'Export / Import' },
+  ],
+
+  showSettings() { this.openModal('Settings', this._settingsBody()); },
+
+  setSettingsTab(id) {
+    S.settingsTab = id;
+    $('modal-body').innerHTML = this._settingsBody();
+  },
+
+  _settingsBody() {
+    const navItem = p => `
+      <button class="settings-nav-item ${S.settingsTab === p.id ? 'active' : ''}" onclick="App.setSettingsTab('${p.id}')">
+        ${esc(p.label)}
+      </button>`;
+    return `
+      <div class="settings-layout">
+        <nav class="settings-nav">
+          ${this.SETTINGS_PAGES.map(navItem).join('')}
+          <div class="settings-nav-divider"></div>
+          <div class="settings-nav-heading">Database</div>
+          ${this.SETTINGS_DATABASE_PAGES.map(navItem).join('')}
+        </nav>
+        <div class="settings-page">
+          ${this._settingsPage()}
+        </div>
+      </div>
+      <div class="modal-footer" style="border-top:1px solid var(--line-soft); margin:24px -20px -16px; padding:16px 20px 12px;">
+        <button class="btn btn-secondary" onclick="App.closeModal()">Close</button>
+      </div>`;
+  },
+
+  _settingsPage() {
+    switch (S.settingsTab) {
+      case 'menu-items':       return this._settingsMenuItemsPage();
+      case 'db-backup':        return this._settingsBackupPage();
+      case 'db-export-import': return this._settingsExportImportPage();
+      case 'appearance':
+      default:                 return this._settingsAppearancePage();
+    }
+  },
+
+  // Re-render the app (so the sidebar/bottom nav picks up the change) and
+  // refresh the modal body in place (it lives outside #root, so App.render()
+  // alone wouldn't touch it).
+  _refreshSettings() {
+    this.render();
+    const body = $('modal-body');
+    if (body) body.innerHTML = this._settingsBody();
+  },
+
+  _settingsAppearancePage() {
+    const current = Theme.current();
+    const opt = (id, label, iconName) => `
+      <button class="pill ${current === id ? 'active' : ''}" onclick="Theme.apply('${id}');App._refreshSettings()">
+        ${icon(iconName, 12)} ${label}
+      </button>`;
+    return `
+      <div class="field-label" style="margin-bottom:10px;">Theme</div>
+      <div style="display:flex; gap:8px;">
+        ${opt('light', 'Light', 'sun')}
+        ${opt('dark', 'Dark', 'moon')}
+      </div>`;
+  },
+
+  _settingsMenuItemsPage() {
+    const items = MenuItems.list();
+    return `
+      <div class="field-label" style="margin-bottom:10px;">Sidebar / bottom nav items</div>
+      <div class="menu-items-list">
+        ${items.map((it, i) => `
+          <div class="menu-item-row ${it.hidden ? 'is-hidden' : ''}">
+            <input type="checkbox" ${it.hidden ? '' : 'checked'}
+                   onchange="MenuItems.toggle('${it.id}');App._refreshSettings()"
+                   aria-label="Show ${esc(it.label)}">
+            <span class="nav-ico">${icon(it.icon, 16)}</span>
+            <span class="menu-item-label">${esc(it.label)}</span>
+            <div class="menu-item-sort">
+              <button class="icon-btn" style="transform:rotate(-90deg);" ${i === 0 ? 'disabled' : ''}
+                      onclick="MenuItems.move('${it.id}',-1);App._refreshSettings()" aria-label="Move ${esc(it.label)} up">
+                ${icon('chevron', 14)}
+              </button>
+              <button class="icon-btn" style="transform:rotate(90deg);" ${i === items.length - 1 ? 'disabled' : ''}
+                      onclick="MenuItems.move('${it.id}',1);App._refreshSettings()" aria-label="Move ${esc(it.label)} down">
+                ${icon('chevron', 14)}
+              </button>
+            </div>
+          </div>`).join('')}
+      </div>`;
+  },
+
+  _settingsBackupPage() {
+    return `
+      <div class="field-label" style="margin-bottom:10px;">Backup interval (days)</div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <input class="input" type="number" min="0" step="1" style="width:100px;"
+               value="${S.backupIntervalDays}"
+               onchange="App.saveBackupInterval(this.value)">
+        <span class="mute" style="font-size:var(--text-xs);">0 disables automatic backups</span>
+      </div>
+      <p class="mute" style="font-size:var(--text-xs); margin-top:8px;">
+        BACKUP_INTERVAL_DAYS in docker-compose.yml is only the default for a fresh install —
+        changing this here takes effect immediately and persists across restarts.
+      </p>
+
+      <div style="margin-top:24px; padding-top:20px; border-top:1px solid var(--line-soft);">
+        <div class="field-label" style="margin-bottom:10px;">Manual backup</div>
+        <button class="btn btn-secondary" onclick="App.createBackupNow()">Create Backup</button>
+      </div>`;
+  },
+
+  async saveBackupInterval(value) {
+    const days = parseInt(value, 10);
+    if (!Number.isFinite(days) || days < 0) {
+      alert('Enter a non-negative number of days.');
+      this._refreshSettings();
+      return;
+    }
+    try {
+      const r = await api.put('/backup/settings', { intervalDays: days });
+      S.backupIntervalDays = r.intervalDays;
+      toast(r.intervalDays === 0
+        ? 'Automatic backups disabled'
+        : `Backup interval set to ${r.intervalDays} day${r.intervalDays === 1 ? '' : 's'}`);
+    } catch (e) {
+      alert('Failed to update backup interval: ' + e.message);
+    }
+    this._refreshSettings();
+  },
+
+  async createBackupNow() {
+    try {
+      const r = await api.post('/backup/create');
+      toast(`Backup created: ${r.file}`);
+    } catch (e) {
+      alert('Backup failed: ' + e.message);
+    }
+  },
+
+  _settingsExportImportPage() {
+    const fmtBtn = (id, label) => `
+      <button class="pill ${S.exportFormat === id ? 'active' : ''}" onclick="App.setExportFormat('${id}')">${label}</button>`;
+    return `
+      <div class="field-label" style="margin-bottom:10px;">Export format</div>
+      <div style="display:flex; gap:8px; margin-bottom:16px;">
+        ${fmtBtn('sql', 'SQL (full backup)')}
+        ${fmtBtn('csv', 'CSV (spreadsheet)')}
+      </div>
+      <button class="btn btn-secondary" onclick="App.exportDatabase()">Export</button>
+
+      <div style="margin-top:24px; padding-top:20px; border-top:1px solid var(--line-soft);">
+        <div class="field-label" style="margin-bottom:6px;">Import</div>
+        <p class="mute" style="font-size:var(--text-xs); margin:0 0 10px;">
+          Imports a CSV in the same shape as the export above. This only adds new bins/items —
+          existing data is never changed or removed. Rows naming an unknown drawer or box type are skipped.
+        </p>
+        <input type="file" id="import-file-input" accept=".csv,text/csv" style="display:none;"
+               onchange="App.importDatabase(this.files[0])">
+        <button class="btn btn-secondary" onclick="$('import-file-input').click()">Import…</button>
+      </div>`;
+  },
+
+  setExportFormat(fmt) {
+    S.exportFormat = fmt;
+    this._refreshSettings();
+  },
+
+  exportDatabase() {
+    window.location.href = '/api/export?format=' + encodeURIComponent(S.exportFormat);
+  },
+
+  async importDatabase(file) {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const r = await fetch('/api/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/csv' },
+        body: text,
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || r.statusText);
+
+      await Promise.all([this.loadLocations(), this.loadBoxTypes(), this.loadContentTypes(), this.loadBins()]);
+      this._refreshSettings();
+
+      const skippedMsg = data.skipped.length ? `, ${data.skipped.length} skipped` : '';
+      toast(`Imported ${data.imported} item${data.imported === 1 ? '' : 's'}${skippedMsg}`);
+      if (data.skipped.length) console.warn('Import skipped rows:', data.skipped);
+    } catch (e) {
+      alert('Import failed: ' + e.message);
     }
   },
 
