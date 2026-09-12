@@ -158,7 +158,7 @@ const App = {
   // mode: 'login' (default) or 'signup' — same screen, toggled by the link
   // at the bottom. Signup always creates a 'viewer' account server-side
   // regardless of anything the client sends.
-  renderLogin({ mode = 'login', error } = {}) {
+  renderLogin({ mode = 'login', error, info } = {}) {
     const isSignup = mode === 'signup';
     $('root').innerHTML = `
       <div class="login-screen">
@@ -175,7 +175,8 @@ const App = {
           <label class="field-label" style="margin-top:12px;">Password</label>
           <input class="input" id="login-password" type="password"
                  autocomplete="${isSignup ? 'new-password' : 'current-password'}" required>
-          ${isSignup ? `<p class="mute" style="font-size:var(--text-xs); margin:4px 0 0;">New accounts are read-only (Viewer) — an admin can upgrade one later.</p>` : ''}
+          ${isSignup ? `<p class="mute" style="font-size:var(--text-xs); margin:4px 0 0;">New accounts are read-only (Viewer) and need admin approval before they can log in.</p>` : ''}
+          ${info ? `<div class="login-info">${esc(info)}</div>` : ''}
           ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
           <button class="btn btn-primary" type="submit" style="margin-top:18px; width:100%;">
             ${isSignup ? 'Create account' : 'Log in'}
@@ -203,14 +204,16 @@ const App = {
     }
   },
 
+  // Signup never logs anyone in — the account comes back 'pending' and
+  // can't authenticate yet (server enforces this at /auth/login too), so
+  // this just drops back to the login screen with a confirmation message.
   async signup(e) {
     e.preventDefault();
     const username = $('login-username').value.trim();
     const password = $('login-password').value;
     try {
       const r = await api.post('/auth/signup', { username, password });
-      S.currentUser = r.user;
-      await this.init();
+      this.renderLogin({ info: r.message || 'Account created — waiting for admin approval.' });
     } catch (signupErr) {
       this.renderLogin({ mode: 'signup', error: signupErr.message || 'Sign up failed' });
     }
@@ -522,20 +525,41 @@ const App = {
   _settingsUsersPage() {
     if (S.users == null) return `<div class="mute" style="font-size:var(--text-sm);">Loading…</div>`;
     const isSelf = id => S.currentUser && id === S.currentUser.id;
+    const pending = S.users.filter(u => u.status === 'pending');
+    const active = S.users.filter(u => u.status !== 'pending');
+    const nameAttr = u => esc(u.username).replace(/'/g, "\\'");
+
+    const pendingRow = u => `
+      <div class="user-row is-pending">
+        <span class="user-name">${esc(u.username)}</span>
+        <span class="pill" style="border-color:var(--warning); color:var(--warning);">Pending</span>
+        <button class="btn btn-secondary sm" onclick="App.approveUser(${u.id})">Approve</button>
+        <button class="icon-btn" title="Reject" onclick="App.deleteUser(${u.id}, '${nameAttr(u)}')">${icon('trash', 16)}</button>
+      </div>`;
+
+    const activeRow = u => `
+      <div class="user-row">
+        <span class="user-name">${esc(u.username)}</span>
+        <select class="select" style="width:110px; height:32px;"
+                onchange="App.setUserRole(${u.id}, this.value)"
+                ${isSelf(u.id) ? 'disabled title="You can\'t change your own role"' : ''}>
+          <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>Viewer</option>
+          <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
+        </select>
+        <button class="icon-btn" title="Delete" onclick="App.deleteUser(${u.id}, '${nameAttr(u)}')">${icon('trash', 16)}</button>
+      </div>`;
+
     return `
+      ${pending.length ? `
+        <div class="field-label" style="margin-bottom:10px;">Pending approval</div>
+        <div class="users-list" style="margin-bottom:24px;">
+          ${pending.map(pendingRow).join('')}
+        </div>
+      ` : ''}
+
       <div class="field-label" style="margin-bottom:10px;">Users</div>
       <div class="users-list">
-        ${S.users.map(u => `
-          <div class="user-row">
-            <span class="user-name">${esc(u.username)}</span>
-            <select class="select" style="width:110px; height:32px;"
-                    onchange="App.setUserRole(${u.id}, this.value)"
-                    ${isSelf(u.id) ? 'disabled title="You can\'t change your own role"' : ''}>
-              <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>Viewer</option>
-              <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
-            </select>
-            <button class="icon-btn" title="Delete" onclick="App.deleteUser(${u.id}, '${esc(u.username).replace(/'/g, "\\'")}')">${icon('trash', 16)}</button>
-          </div>`).join('') || '<div class="mute" style="font-size:var(--text-sm);">No users yet.</div>'}
+        ${active.map(activeRow).join('') || '<div class="mute" style="font-size:var(--text-sm);">No users yet.</div>'}
       </div>
 
       <div style="margin-top:24px; padding-top:20px; border-top:1px solid var(--line-soft);">
@@ -555,6 +579,16 @@ const App = {
   async refreshUsers() {
     try { S.users = await api.get('/users'); } catch (e) { S.users = []; }
     this._refreshSettings();
+  },
+
+  async approveUser(id) {
+    try {
+      await api.put('/users/' + id, { status: 'active' });
+      toast('User approved');
+    } catch (e) {
+      alert('Failed to approve user: ' + e.message);
+    }
+    this.refreshUsers();
   },
 
   async createUser() {

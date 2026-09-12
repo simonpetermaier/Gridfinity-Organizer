@@ -716,6 +716,7 @@ table.gf-table tbody tr:hover { background: var(--soft); }
   border-radius: var(--radius-md);
 }
 .user-name { flex: 1; font-size: var(--text-sm); font-weight: 600; }
+.user-row.is-pending { border-color: color-mix(in srgb, var(--warning) 40%, var(--line-soft)); }
 
 /* ───── Login screen ───── */
 .login-screen {
@@ -742,6 +743,14 @@ table.gf-table tbody tr:hover { background: var(--soft); }
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   color: var(--danger);
+  font-size: var(--text-sm);
+}
+.login-info {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success);
   font-size: var(--text-sm);
 }
 

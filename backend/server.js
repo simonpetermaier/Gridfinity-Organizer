@@ -128,16 +128,22 @@ async function ensureSchema() {
 
   // Accounts + roles. 'admin' can read/write everything and manage users;
   // 'viewer' is read-only (enforced in the route middleware below, not the
-  // DB — same reasoning as the bin_items capacity cap).
+  // DB — same reasoning as the bin_items capacity cap). 'status' gates
+  // self-service signups: 'pending' accounts exist in the table but can't
+  // log in until an admin flips them to 'active' (see /api/auth/login and
+  // PUT /api/users/:id).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id            SERIAL PRIMARY KEY,
       username      VARCHAR(100) UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       role          VARCHAR(20) NOT NULL DEFAULT 'viewer' CHECK (role IN ('admin', 'viewer')),
+      status        VARCHAR(20) NOT NULL DEFAULT 'active',
       created_at    TIMESTAMP DEFAULT NOW()
     )
   `);
+  // Idempotent add for the table created by an earlier version of this app.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active'`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS content_types (
@@ -363,6 +369,9 @@ app.post('/api/auth/login', async (req, res) => {
     const user = r.rows[0];
     const match = user ? await bcrypt.compare(password, user.password_hash) : false;
     if (!user || !match) return res.status(401).json({ error: 'Invalid username or password' });
+    if (user.status === 'pending') {
+      return res.status(403).json({ error: 'Your account is pending admin approval' });
+    }
     establishSession(req, res, user);
   } catch (e) { err(res, e); }
 });
@@ -385,7 +394,7 @@ app.post('/api/auth/setup', async (req, res) => {
     if (count.rows[0].n > 0) return res.status(409).json({ error: 'Setup has already been completed' });
     const hash = await bcrypt.hash(password, 12);
     const r = await pool.query(
-      `INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'admin') RETURNING id, username, role`,
+      `INSERT INTO users (username, password_hash, role, status) VALUES ($1, $2, 'admin', 'active') RETURNING id, username, role`,
       [username, hash]
     );
     establishSession(req, res, r.rows[0]);
@@ -397,13 +406,15 @@ app.post('/api/auth/setup', async (req, res) => {
 
 // Public self-service signup — reachable from the login screen without a
 // session. Always creates a 'viewer' (read-only) account regardless of what
-// the request sends; only an existing admin can promote one afterwards.
-// Requires setup to already be done, since without an admin yet there's
-// nobody around who *could* promote a viewer to admin.
+// the request sends, and always 'pending': it exists but can't log in until
+// an admin approves it (Settings → Access → Users). No session is created
+// here — there's nothing to let them into yet. Requires setup to already be
+// done, since without an admin yet there's nobody around to approve anyone.
 //
-// Note for anyone hardening this for internet exposure: open signup means
-// anyone who can reach the login page can create a read-only account and
-// browse your inventory. If that's not acceptable, the simplest fix is to
+// Note for anyone hardening this for internet exposure: open signup still
+// means anyone who can reach the login page can register — approval just
+// moves the gate from "can view data" to "clutters your user list until you
+// deal with it." If that's not acceptable, the simplest fix is to
 // remove/comment out this route (and the "Sign up" link in app.js).
 app.post('/api/auth/signup', async (req, res) => {
   const username = (req.body?.username || '').trim();
@@ -415,11 +426,11 @@ app.post('/api/auth/signup', async (req, res) => {
     const count = await pool.query('SELECT COUNT(*)::int AS n FROM users');
     if (count.rows[0].n === 0) return res.status(400).json({ error: 'No admin account exists yet' });
     const hash = await bcrypt.hash(password, 12);
-    const r = await pool.query(
-      `INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'viewer') RETURNING id, username, role`,
+    await pool.query(
+      `INSERT INTO users (username, password_hash, role, status) VALUES ($1, $2, 'viewer', 'pending')`,
       [username, hash]
     );
-    establishSession(req, res, r.rows[0]);
+    ok(res, { pending: true, message: 'Account created. An admin needs to approve it before you can log in.' });
   } catch (e) {
     if (e.code === '23505') return res.status(400).json({ error: 'Username already exists' });
     err(res, e);
@@ -475,11 +486,13 @@ app.use('/api/users', requireAdmin);
 
 app.get('/api/users', async (_req, res) => {
   try {
-    const r = await pool.query('SELECT id, username, role, created_at FROM users ORDER BY id');
+    const r = await pool.query('SELECT id, username, role, status, created_at FROM users ORDER BY id');
     ok(res, r.rows);
   } catch (e) { err(res, e); }
 });
 
+// Admin-created accounts are approved by construction — an admin typing in
+// a username and password for someone is already the approval step.
 app.post('/api/users', async (req, res) => {
   const username = (req.body?.username || '').trim();
   const password = req.body?.password || '';
@@ -490,7 +503,7 @@ app.post('/api/users', async (req, res) => {
   try {
     const hash = await bcrypt.hash(password, 12);
     const r = await pool.query(
-      'INSERT INTO users (username, password_hash, role) VALUES ($1,$2,$3) RETURNING id, username, role, created_at',
+      `INSERT INTO users (username, password_hash, role, status) VALUES ($1,$2,$3,'active') RETURNING id, username, role, status, created_at`,
       [username, hash, role]
     );
     ok(res, r.rows[0]);
@@ -500,11 +513,15 @@ app.post('/api/users', async (req, res) => {
   }
 });
 
+// Also how a pending signup gets approved: PUT { status: 'active' }.
 app.put('/api/users/:id', async (req, res) => {
   const id = parseInt(req.params.id, 10);
-  const { role, password } = req.body || {};
+  const { role, password, status } = req.body || {};
   if (role && role !== 'admin' && role !== 'viewer') {
     return res.status(400).json({ error: 'role must be "admin" or "viewer"' });
+  }
+  if (status && status !== 'active' && status !== 'pending') {
+    return res.status(400).json({ error: 'status must be "active" or "pending"' });
   }
   try {
     if (role === 'viewer') {
@@ -514,6 +531,7 @@ app.put('/api/users/:id', async (req, res) => {
     const sets = [];
     const vals = [];
     if (role) { vals.push(role); sets.push(`role = $${vals.length}`); }
+    if (status) { vals.push(status); sets.push(`status = $${vals.length}`); }
     if (password) {
       vals.push(await bcrypt.hash(password, 12));
       sets.push(`password_hash = $${vals.length}`);
@@ -521,7 +539,7 @@ app.put('/api/users/:id', async (req, res) => {
     if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
     vals.push(id);
     const r = await pool.query(
-      `UPDATE users SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING id, username, role, created_at`,
+      `UPDATE users SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING id, username, role, status, created_at`,
       vals
     );
     r.rows.length ? ok(res, r.rows[0]) : notFound(res);
