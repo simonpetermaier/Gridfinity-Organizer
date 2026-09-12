@@ -34,7 +34,14 @@ const api = {
     const opts = { method, headers: { 'Content-Type': 'application/json' } };
     if (body !== undefined) opts.body = JSON.stringify(body);
     const r = await fetch('/api' + path, opts);
-    const data = await r.json();
+    const data = await r.json().catch(() => ({}));
+    // Session expired (or never existed) mid-use. /auth/login itself can
+    // legitimately 401 for a wrong password — that one has to reach the
+    // caller's catch block instead of bouncing to the login screen.
+    if (r.status === 401 && path !== '/auth/login') {
+      window.location.href = '/';
+      return new Promise(() => {}); // navigating away — never resolve
+    }
     if (!r.ok) throw new Error(data.error || r.statusText);
     return data;
   },
@@ -48,6 +55,8 @@ const api = {
 // STATE
 // ═══════════════════════════════════════════════════════════════
 const S = {
+  currentUser:   null,           // { id, username, role } once logged in — see App.checkAuth()
+  needsSetup:    false,          // true when the users table is empty — show the create-admin screen instead of login
   tab:           'inventory',   // inventory | locations | box-types | content-types | search | scanner
   settingsTab:   'appearance',  // appearance | menu-items — active page inside the Settings modal
   qrPayloadMode: 'url',         // 'url' = host-coupled URL · 'id' = host-portable gfbin:N
@@ -65,6 +74,7 @@ const S = {
   quickFilter:   '',            // topbar quick-filter — narrows whatever list is on the current tab
   backupIntervalDays: 0,        // Settings → Database → Backup — loaded from /api/backup/settings at boot
   exportFormat:  'sql',         // Settings → Database → Export/Import — 'sql' | 'csv'
+  users:         null,          // Settings → Access → Users — null until first fetched (admin only)
   formItems:     [],            // draft items inside the bin form modal
   // grid picker state (shared for add/edit bin modals)
   grid: {
