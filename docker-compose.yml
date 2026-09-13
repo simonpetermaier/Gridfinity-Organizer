@@ -43,6 +43,19 @@ services:
       #   RESTORE_FROM=gridfinity-2026-05-15T18-30-45Z.sql docker compose up -d backend
       # Marker file prevents accidental re-restore on subsequent restarts.
       RESTORE_FROM: ${RESTORE_FROM:-}
+      # Login / sessions — see backend/server.js and README "User accounts".
+      # Set this to a long random string, e.g. `openssl rand -hex 32`.
+      # Without it, a random secret is generated on every start and every
+      # restart logs everyone out.
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      # Set to "true" once the app is served over HTTPS (see "Camera & HTTPS"
+      # below) so session cookies get the Secure flag. Leave false for plain
+      # HTTP on your LAN.
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # No admin account env vars — the first visit to the app prompts you
+      # to create the admin account interactively. Additional accounts come
+      # from that admin (Settings → Access → Users) or self-service sign-up
+      # on the login screen (always created as read-only 'viewer').
     volumes:
       - ./backups:/backups
     ports:
