@@ -4,6 +4,9 @@ const express = require('express');
 const { Pool }  = require('pg');
 const cors      = require('cors');
 const path      = require('path');
+const crypto    = require('crypto');
+const bcrypt    = require('bcryptjs');
+const session   = require('express-session');
 const { spawn } = require('child_process');
 const {
   restoreIfRequested, initBackupSchedule, scheduleBackups,
@@ -18,9 +21,36 @@ const pool = new Pool({
   user:     process.env.DB_USER     || 'gridfinity',
   password: process.env.DB_PASSWORD || 'gridfinity_pw',
 });
+const pgSession = require('connect-pg-simple')(session);
 
 app.use(cors());
 app.use(express.json());
+
+// ── sessions ─────────────────────────────────────────────────
+// SESSION_SECRET should be set for any deployment that survives restarts —
+// without it every restart invalidates every login. COOKIE_SECURE should be
+// "true" once the app sits behind HTTPS (see README "Camera & HTTPS"); it's
+// off by default so plain-HTTP LAN setups still work.
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+if (!process.env.SESSION_SECRET) {
+  console.warn('[auth] SESSION_SECRET not set — using a random one for this run. '
+    + 'Every restart will log everyone out. Set SESSION_SECRET in docker-compose.yml to persist logins.');
+}
+const COOKIE_SECURE = /^true$/i.test(process.env.COOKIE_SECURE || '');
+
+app.use(session({
+  store: new pgSession({ pool, tableName: 'session', createTableIfMissing: true }),
+  secret: SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: COOKIE_SECURE,
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+  },
+}));
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── helpers ──────────────────────────────────────────────────
@@ -95,6 +125,25 @@ async function ensureSchema() {
        ON CONFLICT (key) DO NOTHING`,
     [String(seedInterval)]
   );
+
+  // Accounts + roles. 'admin' can read/write everything and manage users;
+  // 'viewer' is read-only (enforced in the route middleware below, not the
+  // DB — same reasoning as the bin_items capacity cap). 'status' gates
+  // self-service signups: 'pending' accounts exist in the table but can't
+  // log in until an admin flips them to 'active' (see /api/auth/login and
+  // PUT /api/users/:id).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id            SERIAL PRIMARY KEY,
+      username      VARCHAR(100) UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      role          VARCHAR(20) NOT NULL DEFAULT 'viewer' CHECK (role IN ('admin', 'viewer')),
+      status        VARCHAR(20) NOT NULL DEFAULT 'active',
+      created_at    TIMESTAMP DEFAULT NOW()
+    )
+  `);
+  // Idempotent add for the table created by an earlier version of this app.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active'`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS content_types (
@@ -278,6 +327,239 @@ const BIN_ITEMS_JSON = `
     LEFT JOIN content_types ct ON bi.content_type_id = ct.id
     WHERE bi.bin_id = b.id
   ), '[]'::json) AS items`;
+
+// ============================================================
+// AUTH — session-based login. Everything under /api requires a session
+// except login/me; everything that isn't a GET additionally requires the
+// 'admin' role. /api/users is admin-only for every method, including GET.
+//
+// This also locks down the public bin-scan page: /bin/:id itself still
+// serves the SPA shell (no data in it), but the JSON it needs — GET
+// /api/bins/:id — sits behind requireAuth like everything else, so
+// scanning a sticker without being logged in now shows a login prompt
+// instead of the bin's contents.
+// ============================================================
+function requireAuth(req, res, next) {
+  if (req.session && req.session.userId) return next();
+  res.status(401).json({ error: 'Authentication required' });
+}
+function requireAdmin(req, res, next) {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Authentication required' });
+  if (req.session.role !== 'admin') return res.status(403).json({ error: 'Admin role required' });
+  next();
+}
+
+// Logs a freshly created user in by rotating the session and stashing their
+// identity in it — shared by login, first-run setup, and signup below.
+function establishSession(req, res, user) {
+  req.session.regenerate(regenErr => {
+    if (regenErr) return err(res, regenErr);
+    req.session.userId = user.id;
+    req.session.username = user.username;
+    req.session.role = user.role;
+    ok(res, { user: { id: user.id, username: user.username, role: user.role } });
+  });
+}
+
+app.post('/api/auth/login', async (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) return res.status(400).json({ error: 'username and password required' });
+  try {
+    const r = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+    const user = r.rows[0];
+    const match = user ? await bcrypt.compare(password, user.password_hash) : false;
+    if (!user || !match) return res.status(401).json({ error: 'Invalid username or password' });
+    if (user.status === 'pending') {
+      return res.status(403).json({ error: 'Your account is pending admin approval' });
+    }
+    establishSession(req, res, user);
+  } catch (e) { err(res, e); }
+});
+
+// First-run only: creates the one and only way to get an 'admin' account
+// through the API. Refuses once any user exists — from then on, accounts
+// come from an admin (Settings → Access → Users) or self-service /signup
+// below (always 'viewer').
+app.post('/api/auth/setup', async (req, res) => {
+  const username = (req.body?.username || '').trim();
+  const password = req.body?.password || '';
+  // No minimum length for now — a configurable policy belongs in
+  // Settings → Access, not hardcoded here. See the other /api/auth and
+  // /api/users routes below for the same TODO.
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
+  try {
+    const count = await pool.query('SELECT COUNT(*)::int AS n FROM users');
+    if (count.rows[0].n > 0) return res.status(409).json({ error: 'Setup has already been completed' });
+    const hash = await bcrypt.hash(password, 12);
+    const r = await pool.query(
+      `INSERT INTO users (username, password_hash, role, status) VALUES ($1, $2, 'admin', 'active') RETURNING id, username, role`,
+      [username, hash]
+    );
+    establishSession(req, res, r.rows[0]);
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ error: 'Setup has already been completed' });
+    err(res, e);
+  }
+});
+
+// Public self-service signup — reachable from the login screen without a
+// session. Always creates a 'viewer' (read-only) account regardless of what
+// the request sends, and always 'pending': it exists but can't log in until
+// an admin approves it (Settings → Access → Users). No session is created
+// here — there's nothing to let them into yet. Requires setup to already be
+// done, since without an admin yet there's nobody around to approve anyone.
+//
+// Note for anyone hardening this for internet exposure: open signup still
+// means anyone who can reach the login page can register — approval just
+// moves the gate from "can view data" to "clutters your user list until you
+// deal with it." If that's not acceptable, the simplest fix is to
+// remove/comment out this route (and the "Sign up" link in app.js).
+app.post('/api/auth/signup', async (req, res) => {
+  const username = (req.body?.username || '').trim();
+  const password = req.body?.password || '';
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
+  try {
+    const count = await pool.query('SELECT COUNT(*)::int AS n FROM users');
+    if (count.rows[0].n === 0) return res.status(400).json({ error: 'No admin account exists yet' });
+    const hash = await bcrypt.hash(password, 12);
+    await pool.query(
+      `INSERT INTO users (username, password_hash, role, status) VALUES ($1, $2, 'viewer', 'pending')`,
+      [username, hash]
+    );
+    ok(res, { pending: true, message: 'Account created. An admin needs to approve it before you can log in.' });
+  } catch (e) {
+    if (e.code === '23505') return res.status(400).json({ error: 'Username already exists' });
+    err(res, e);
+  }
+});
+
+app.get('/api/auth/me', async (req, res) => {
+  if (req.session && req.session.userId) {
+    return ok(res, { user: { id: req.session.userId, username: req.session.username, role: req.session.role } });
+  }
+  try {
+    const count = await pool.query('SELECT COUNT(*)::int AS n FROM users');
+    ok(res, { user: null, needsSetup: count.rows[0].n === 0 });
+  } catch (e) { err(res, e); }
+});
+
+// Everything below this line requires a logged-in session.
+app.use('/api', requireAuth);
+
+app.post('/api/auth/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.clearCookie('connect.sid');
+    ok(res, { success: true });
+  });
+});
+
+app.put('/api/auth/password', async (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (!newPassword) {
+    return res.status(400).json({ error: 'New password is required' });
+  }
+  try {
+    const r = await pool.query('SELECT * FROM users WHERE id = $1', [req.session.userId]);
+    const user = r.rows[0];
+    if (!user) return res.status(401).json({ error: 'Session user no longer exists' });
+    const match = await bcrypt.compare(currentPassword || '', user.password_hash);
+    if (!match) return res.status(400).json({ error: 'Current password is incorrect' });
+    const hash = await bcrypt.hash(newPassword, 12);
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, user.id]);
+    ok(res, { success: true });
+  } catch (e) { err(res, e); }
+});
+
+// Everything below this line that isn't a GET requires the 'admin' role.
+app.use('/api', (req, res, next) => {
+  if (req.method === 'GET' || req.session.role === 'admin') return next();
+  res.status(403).json({ error: 'Admin role required' });
+});
+
+// User management is admin-only for every method, GET included — a viewer
+// shouldn't be able to enumerate other accounts.
+app.use('/api/users', requireAdmin);
+
+app.get('/api/users', async (_req, res) => {
+  try {
+    const r = await pool.query('SELECT id, username, role, status, created_at FROM users ORDER BY id');
+    ok(res, r.rows);
+  } catch (e) { err(res, e); }
+});
+
+// Admin-created accounts are approved by construction — an admin typing in
+// a username and password for someone is already the approval step.
+app.post('/api/users', async (req, res) => {
+  const username = (req.body?.username || '').trim();
+  const password = req.body?.password || '';
+  const role = req.body?.role === 'admin' ? 'admin' : 'viewer';
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
+  try {
+    const hash = await bcrypt.hash(password, 12);
+    const r = await pool.query(
+      `INSERT INTO users (username, password_hash, role, status) VALUES ($1,$2,$3,'active') RETURNING id, username, role, status, created_at`,
+      [username, hash, role]
+    );
+    ok(res, r.rows[0]);
+  } catch (e) {
+    if (e.code === '23505') return res.status(400).json({ error: 'Username already exists' });
+    err(res, e);
+  }
+});
+
+// Also how a pending signup gets approved: PUT { status: 'active' }.
+app.put('/api/users/:id', async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const { role, password, status } = req.body || {};
+  if (role && role !== 'admin' && role !== 'viewer') {
+    return res.status(400).json({ error: 'role must be "admin" or "viewer"' });
+  }
+  if (status && status !== 'active' && status !== 'pending') {
+    return res.status(400).json({ error: 'status must be "active" or "pending"' });
+  }
+  try {
+    if (role === 'viewer') {
+      const admins = await pool.query(`SELECT COUNT(*)::int AS n FROM users WHERE role = 'admin' AND id <> $1`, [id]);
+      if (admins.rows[0].n === 0) return res.status(400).json({ error: 'Cannot demote the last remaining admin' });
+    }
+    const sets = [];
+    const vals = [];
+    if (role) { vals.push(role); sets.push(`role = $${vals.length}`); }
+    if (status) { vals.push(status); sets.push(`status = $${vals.length}`); }
+    if (password) {
+      vals.push(await bcrypt.hash(password, 12));
+      sets.push(`password_hash = $${vals.length}`);
+    }
+    if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+    vals.push(id);
+    const r = await pool.query(
+      `UPDATE users SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING id, username, role, status, created_at`,
+      vals
+    );
+    r.rows.length ? ok(res, r.rows[0]) : notFound(res);
+  } catch (e) { err(res, e); }
+});
+
+app.delete('/api/users/:id', async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  try {
+    const target = await pool.query('SELECT role FROM users WHERE id = $1', [id]);
+    if (!target.rows.length) return notFound(res);
+    if (target.rows[0].role === 'admin') {
+      const admins = await pool.query(`SELECT COUNT(*)::int AS n FROM users WHERE role = 'admin' AND id <> $1`, [id]);
+      if (admins.rows[0].n === 0) return res.status(400).json({ error: 'Cannot delete the last remaining admin' });
+    }
+    await pool.query('DELETE FROM users WHERE id = $1', [id]);
+    if (req.session.userId === id) req.session.destroy(() => {}); // deleted own account
+    ok(res, { success: true });
+  } catch (e) { err(res, e); }
+});
 
 // ============================================================
 // LOCATIONS
@@ -599,6 +881,45 @@ app.put('/api/config', async (req, res) => {
       [qrPayloadMode]
     );
     ok(res, { qrPayloadMode });
+  } catch (e) { err(res, e); }
+});
+
+// ============================================================
+// MENU PERMISSIONS — which nav items (Inventory, Drawers, …) 'viewer'
+// accounts are allowed to see. Global (persisted in app_settings, one JSON
+// blob), unlike each browser's own show/hide/reorder preference in
+// localStorage. Admins always see every menu regardless of this setting —
+// it's a viewer restriction, not a way to lock yourself out.
+//
+// This only controls what the nav *offers to navigate to* — it does not
+// itself lock down the underlying REST routes (those already follow the
+// separate GET-for-everyone / mutate-for-admin rule enforced above). A
+// viewer with the URL bar could still reach a restricted page's data by
+// calling its API directly, same as they could without this feature.
+// ============================================================
+app.get('/api/menu-permissions', async (_req, res) => {
+  try {
+    const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'menu_permissions'`);
+    const permissions = r.rows[0] ? JSON.parse(r.rows[0].value) : {};
+    ok(res, { permissions });
+  } catch (e) { err(res, e); }
+});
+
+app.put('/api/menu-permissions', async (req, res) => {
+  const permissions = req.body?.permissions;
+  if (!permissions || typeof permissions !== 'object' || Array.isArray(permissions)) {
+    return res.status(400).json({ error: 'permissions must be an object of {menuId: boolean}' });
+  }
+  if (!Object.values(permissions).every(v => typeof v === 'boolean')) {
+    return res.status(400).json({ error: 'each permission value must be a boolean' });
+  }
+  try {
+    await pool.query(
+      `INSERT INTO app_settings (key, value) VALUES ('menu_permissions', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [JSON.stringify(permissions)]
+    );
+    ok(res, { permissions });
   } catch (e) { err(res, e); }
 });
 

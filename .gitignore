@@ -1,3 +1,5 @@
 Concept/
 backups/
-node_modules/
+Spoolman/
+
+.DS_Store

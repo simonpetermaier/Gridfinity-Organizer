@@ -74,13 +74,23 @@ const App = {
     // Sprite first so the first paint has icons; small file, served same-origin.
     await injectIconSprite();
 
+    // Every route under /api requires a session — including the bin-scan
+    // page's data — so this gate covers the whole app, QR scanning included.
+    // Not logged in? Show the login form (or, on a fresh install with no
+    // users yet, the one-time "create admin account" screen) regardless of
+    // what URL was opened.
+    if (!(await this.checkAuth())) {
+      if (S.needsSetup) this.renderSetup(); else this.renderLogin();
+      return;
+    }
+
     // Bin scan page (mobile, no shell) — needs config for the inline QR but
     // can skip the inventory/box/content loads.
     const m = window.location.pathname.match(/^\/bin\/(\d+)$/);
     if (m) { await this.loadConfig(); await this.renderBinScan(m[1]); return; }
 
     await Promise.all([
-      this.loadConfig(), this.loadBackupSettings(),
+      this.loadConfig(), this.loadBackupSettings(), this.loadMenuPermissions(),
       this.loadLocations(), this.loadBoxTypes(),
       this.loadContentTypes(), this.loadBins(),
     ]);
@@ -90,6 +100,128 @@ const App = {
     // CSS between phone and tablet/desktop — re-render on crossing that
     // breakpoint so resizing/rotating doesn't leave a stale layout.
     window.matchMedia('(max-width: 768px)').addEventListener('change', () => this.render());
+  },
+
+  async checkAuth() {
+    try {
+      const r = await api.get('/auth/me');
+      S.currentUser = (r && r.user) || null;
+      S.needsSetup = !!(r && r.needsSetup);
+    } catch (e) {
+      S.currentUser = null;
+      S.needsSetup = false;
+    }
+    return !!S.currentUser;
+  },
+
+  // One-time screen shown only while the users table is empty — creates
+  // the first (and only API-reachable) admin account.
+  renderSetup(error) {
+    $('root').innerHTML = `
+      <div class="login-screen">
+        <form class="login-card" onsubmit="App.setup(event)">
+          <div class="login-brand">
+            <div class="sidebar-brand-mark">${icon('brand', 22)}</div>
+            <div>
+              <div class="sidebar-brand-title">Gridfinity</div>
+              <div class="sidebar-brand-sub">Organizer</div>
+            </div>
+          </div>
+          <p class="mute" style="font-size:var(--text-sm); margin:0 0 16px;">
+            No account exists yet. Create the admin account to get started.
+          </p>
+          <label class="field-label">Username</label>
+          <input class="input" id="login-username" autocomplete="username" required>
+          <label class="field-label" style="margin-top:12px;">Password</label>
+          <input class="input" id="login-password" type="password" autocomplete="new-password" required>
+          ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
+          <button class="btn btn-primary" type="submit" style="margin-top:18px; width:100%;">Create admin account</button>
+        </form>
+      </div>`;
+    $('login-username')?.focus();
+  },
+
+  async setup(e) {
+    e.preventDefault();
+    const username = $('login-username').value.trim();
+    const password = $('login-password').value;
+    try {
+      const r = await api.post('/auth/setup', { username, password });
+      S.currentUser = r.user;
+      S.needsSetup = false;
+      await this.init();
+    } catch (setupErr) {
+      this.renderSetup(setupErr.message || 'Setup failed');
+    }
+  },
+
+  // mode: 'login' (default) or 'signup' — same screen, toggled by the link
+  // at the bottom. Signup always creates a 'viewer' account server-side
+  // regardless of anything the client sends.
+  renderLogin({ mode = 'login', error, info } = {}) {
+    const isSignup = mode === 'signup';
+    $('root').innerHTML = `
+      <div class="login-screen">
+        <form class="login-card" onsubmit="App.${isSignup ? 'signup' : 'login'}(event)">
+          <div class="login-brand">
+            <div class="sidebar-brand-mark">${icon('brand', 22)}</div>
+            <div>
+              <div class="sidebar-brand-title">Gridfinity</div>
+              <div class="sidebar-brand-sub">Organizer</div>
+            </div>
+          </div>
+          <label class="field-label">Username</label>
+          <input class="input" id="login-username" autocomplete="username" required>
+          <label class="field-label" style="margin-top:12px;">Password</label>
+          <input class="input" id="login-password" type="password"
+                 autocomplete="${isSignup ? 'new-password' : 'current-password'}" required>
+          ${isSignup ? `<p class="mute" style="font-size:var(--text-xs); margin:4px 0 0;">New accounts are read-only (Viewer) and need admin approval before they can log in.</p>` : ''}
+          ${info ? `<div class="login-info">${esc(info)}</div>` : ''}
+          ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
+          <button class="btn btn-primary" type="submit" style="margin-top:18px; width:100%;">
+            ${isSignup ? 'Create account' : 'Log in'}
+          </button>
+          <p class="mute" style="font-size:var(--text-xs); text-align:center; margin:16px 0 0;">
+            ${isSignup
+              ? `Already have an account? <a href="#" onclick="event.preventDefault();App.renderLogin();">Log in</a>`
+              : `Need an account? <a href="#" onclick="event.preventDefault();App.renderLogin({mode:'signup'});">Sign up</a>`}
+          </p>
+        </form>
+      </div>`;
+    $('login-username')?.focus();
+  },
+
+  async login(e) {
+    e.preventDefault();
+    const username = $('login-username').value.trim();
+    const password = $('login-password').value;
+    try {
+      const r = await api.post('/auth/login', { username, password });
+      S.currentUser = r.user;
+      await this.init();
+    } catch (loginErr) {
+      this.renderLogin({ error: loginErr.message || 'Login failed' });
+    }
+  },
+
+  // Signup never logs anyone in — the account comes back 'pending' and
+  // can't authenticate yet (server enforces this at /auth/login too), so
+  // this just drops back to the login screen with a confirmation message.
+  async signup(e) {
+    e.preventDefault();
+    const username = $('login-username').value.trim();
+    const password = $('login-password').value;
+    try {
+      const r = await api.post('/auth/signup', { username, password });
+      this.renderLogin({ info: r.message || 'Account created — waiting for admin approval.' });
+    } catch (signupErr) {
+      this.renderLogin({ mode: 'signup', error: signupErr.message || 'Sign up failed' });
+    }
+  },
+
+  async logout() {
+    try { await api.post('/auth/logout'); } catch (e) { /* logging out anyway */ }
+    window.location.href = '/';
   },
 
   // Tiny client-config fetch — currently just qrPayloadMode but a stable
@@ -114,6 +246,25 @@ const App = {
     } catch (e) {
       console.warn('Backup settings fetch failed; using defaults:', e.message);
     }
+  },
+
+  // Global, admin-configured "can viewers see this menu" map. Failures are
+  // non-fatal: an empty map means nothing is restricted, same as before
+  // this feature existed.
+  async loadMenuPermissions() {
+    try {
+      const r = await api.get('/menu-permissions');
+      S.menuPermissions = (r && r.permissions) || {};
+    } catch (e) {
+      console.warn('Menu permissions fetch failed; using defaults:', e.message);
+    }
+  },
+
+  // Admins always see every menu — this is a viewer restriction, not a
+  // general-purpose lock. Missing/undefined for a menu id means allowed.
+  _menuAllowed(id) {
+    if (S.currentUser?.role === 'admin') return true;
+    return S.menuPermissions[id] !== false;
   },
 
   async loadLocations()    { S.locations    = await api.get('/locations'); },
@@ -166,7 +317,7 @@ const App = {
           </div>
         </div>
         <nav>
-          ${MenuItems.visible().map(n => `
+          ${MenuItems.visible().filter(n => this._menuAllowed(n.id)).map(n => `
             <button class="nav-item ${S.tab === n.id ? 'active' : ''}"
                     onclick="App.switchTab('${n.id}')"
                     ${S.tab === n.id ? 'aria-current="page"' : ''}>
@@ -216,6 +367,7 @@ const App = {
   },
 
   renderTopAction() {
+    if (S.currentUser?.role !== 'admin') return ''; // viewers are read-only; nothing here would do anything but 403
     const plus = icon('plus', 14);
     const btn = (label, handler, ariaLabel) =>
       `<button class="btn btn-primary" onclick="${handler}" aria-label="${ariaLabel}">${plus}<span class="btn-label">${label}</span></button>`;
@@ -229,6 +381,12 @@ const App = {
   },
 
   renderTab() {
+    // Defense in depth: if the current tab became restricted (an admin
+    // changed menu permissions, or a stale S.tab survived a role change)
+    // fall back to the first menu this account can actually see.
+    if (!this._menuAllowed(S.tab)) {
+      S.tab = MenuItems.visible().find(n => this._menuAllowed(n.id))?.id || 'inventory';
+    }
     switch (S.tab) {
       case 'inventory':     return this.renderInventory();
       case 'locations':     return this.renderLocations();
@@ -266,10 +424,14 @@ const App = {
   SETTINGS_PAGES: [
     { id: 'appearance', label: 'Appearance' },
     { id: 'menu-items', label: 'Menu Items' },
+    { id: 'account',    label: 'Account' },
   ],
   SETTINGS_DATABASE_PAGES: [
     { id: 'db-backup',        label: 'Backup' },
     { id: 'db-export-import', label: 'Export / Import' },
+  ],
+  SETTINGS_ACCESS_PAGES: [
+    { id: 'access-users', label: 'Users' },
   ],
 
   showSettings() { this.openModal('Settings', this._settingsBody()); },
@@ -277,6 +439,7 @@ const App = {
   setSettingsTab(id) {
     S.settingsTab = id;
     $('modal-body').innerHTML = this._settingsBody();
+    if (id === 'access-users' && S.users == null) this.refreshUsers();
   },
 
   _settingsBody() {
@@ -284,13 +447,22 @@ const App = {
       <button class="settings-nav-item ${S.settingsTab === p.id ? 'active' : ''}" onclick="App.setSettingsTab('${p.id}')">
         ${esc(p.label)}
       </button>`;
+    // Backups, export/import, and user management are all mutating/admin
+    // surfaces — the server already rejects them for viewers, but there's
+    // no reason to show a viewer buttons that only ever 403.
+    const isAdmin = S.currentUser?.role === 'admin';
     return `
       <div class="settings-layout">
         <nav class="settings-nav">
           ${this.SETTINGS_PAGES.map(navItem).join('')}
-          <div class="settings-nav-divider"></div>
-          <div class="settings-nav-heading">Database</div>
-          ${this.SETTINGS_DATABASE_PAGES.map(navItem).join('')}
+          ${isAdmin ? `
+            <div class="settings-nav-divider"></div>
+            <div class="settings-nav-heading">Database</div>
+            ${this.SETTINGS_DATABASE_PAGES.map(navItem).join('')}
+            <div class="settings-nav-divider"></div>
+            <div class="settings-nav-heading">Access</div>
+            ${this.SETTINGS_ACCESS_PAGES.map(navItem).join('')}
+          ` : ''}
         </nav>
         <div class="settings-page">
           ${this._settingsPage()}
@@ -302,10 +474,13 @@ const App = {
   },
 
   _settingsPage() {
+    const isAdmin = S.currentUser?.role === 'admin';
     switch (S.settingsTab) {
       case 'menu-items':       return this._settingsMenuItemsPage();
-      case 'db-backup':        return this._settingsBackupPage();
-      case 'db-export-import': return this._settingsExportImportPage();
+      case 'account':          return this._settingsAccountPage();
+      case 'db-backup':        return isAdmin ? this._settingsBackupPage() : this._settingsAppearancePage();
+      case 'db-export-import': return isAdmin ? this._settingsExportImportPage() : this._settingsAppearancePage();
+      case 'access-users':     return isAdmin ? this._settingsUsersPage() : this._settingsAppearancePage();
       case 'appearance':
       default:                 return this._settingsAppearancePage();
     }
@@ -334,10 +509,160 @@ const App = {
       </div>`;
   },
 
+  _settingsAccountPage() {
+    const u = S.currentUser || {};
+    return `
+      <div class="field-label" style="margin-bottom:10px;">Signed in as</div>
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:20px;">
+        <span class="pill accent">${esc(u.username || '—')}</span>
+        <span class="mute" style="font-size:var(--text-xs); text-transform:capitalize;">${esc(u.role || '')}</span>
+      </div>
+
+      <div class="field-label" style="margin-bottom:10px;">Change password</div>
+      <div style="display:flex; flex-direction:column; gap:8px; max-width:280px;">
+        <input class="input" type="password" id="acct-current-pw" placeholder="Current password" autocomplete="current-password">
+        <input class="input" type="password" id="acct-new-pw" placeholder="New password" autocomplete="new-password">
+        <button class="btn btn-secondary" onclick="App.changeOwnPassword()" style="align-self:flex-start;">Update password</button>
+      </div>
+
+      <div style="margin-top:24px; padding-top:20px; border-top:1px solid var(--line-soft);">
+        <button class="btn btn-secondary" onclick="App.logout()">Log out</button>
+      </div>`;
+  },
+
+  async changeOwnPassword() {
+    const currentPassword = $('acct-current-pw').value;
+    const newPassword = $('acct-new-pw').value;
+    if (!newPassword) {
+      alert('Enter a new password.');
+      return;
+    }
+    try {
+      await api.put('/auth/password', { currentPassword, newPassword });
+      toast('Password updated');
+      $('acct-current-pw').value = '';
+      $('acct-new-pw').value = '';
+    } catch (e) {
+      alert('Failed to update password: ' + e.message);
+    }
+  },
+
+  _settingsUsersPage() {
+    if (S.users == null) return `<div class="mute" style="font-size:var(--text-sm);">Loading…</div>`;
+    const isSelf = id => S.currentUser && id === S.currentUser.id;
+    const pending = S.users.filter(u => u.status === 'pending');
+    const active = S.users.filter(u => u.status !== 'pending');
+    const nameAttr = u => esc(u.username).replace(/'/g, "\\'");
+
+    const pendingRow = u => `
+      <div class="user-row is-pending">
+        <span class="user-name">${esc(u.username)}</span>
+        <span class="pill" style="border-color:var(--warning); color:var(--warning);">Pending</span>
+        <button class="btn btn-secondary sm" onclick="App.approveUser(${u.id})">Approve</button>
+        <button class="icon-btn" title="Reject" onclick="App.deleteUser(${u.id}, '${nameAttr(u)}')">${icon('trash', 16)}</button>
+      </div>`;
+
+    const activeRow = u => `
+      <div class="user-row">
+        <span class="user-name">${esc(u.username)}</span>
+        <select class="select" style="width:110px; height:32px;"
+                onchange="App.setUserRole(${u.id}, this.value)"
+                ${isSelf(u.id) ? 'disabled title="You can\'t change your own role"' : ''}>
+          <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>Viewer</option>
+          <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
+        </select>
+        <button class="icon-btn" title="Delete" onclick="App.deleteUser(${u.id}, '${nameAttr(u)}')">${icon('trash', 16)}</button>
+      </div>`;
+
+    return `
+      ${pending.length ? `
+        <div class="field-label" style="margin-bottom:10px;">Pending approval</div>
+        <div class="users-list" style="margin-bottom:24px;">
+          ${pending.map(pendingRow).join('')}
+        </div>
+      ` : ''}
+
+      <div class="field-label" style="margin-bottom:10px;">Users</div>
+      <div class="users-list">
+        ${active.map(activeRow).join('') || '<div class="mute" style="font-size:var(--text-sm);">No users yet.</div>'}
+      </div>
+
+      <div style="margin-top:24px; padding-top:20px; border-top:1px solid var(--line-soft);">
+        <div class="field-label" style="margin-bottom:10px;">Add user</div>
+        <div style="display:flex; flex-direction:column; gap:8px; max-width:280px;">
+          <input class="input" id="nu-username" placeholder="Username">
+          <input class="input" type="password" id="nu-password" placeholder="Password">
+          <select class="select" id="nu-role">
+            <option value="viewer" selected>Viewer</option>
+            <option value="admin">Admin</option>
+          </select>
+          <button class="btn btn-primary" onclick="App.createUser()" style="align-self:flex-start;">Add user</button>
+        </div>
+      </div>`;
+  },
+
+  async refreshUsers() {
+    try { S.users = await api.get('/users'); } catch (e) { S.users = []; }
+    this._refreshSettings();
+  },
+
+  async approveUser(id) {
+    try {
+      await api.put('/users/' + id, { status: 'active' });
+      toast('User approved');
+    } catch (e) {
+      alert('Failed to approve user: ' + e.message);
+    }
+    this.refreshUsers();
+  },
+
+  async createUser() {
+    const username = $('nu-username').value.trim();
+    const password = $('nu-password').value;
+    const role = $('nu-role').value;
+    if (!username || !password) {
+      alert('Username and password are required.');
+      return;
+    }
+    try {
+      await api.post('/users', { username, password, role });
+      toast(`User "${username}" created`);
+      await this.refreshUsers();
+    } catch (e) {
+      alert('Failed to create user: ' + e.message);
+    }
+  },
+
+  async setUserRole(id, role) {
+    try {
+      await api.put('/users/' + id, { role });
+      toast('Role updated');
+    } catch (e) {
+      alert('Failed to update role: ' + e.message);
+    }
+    this.refreshUsers();
+  },
+
+  async deleteUser(id, username) {
+    if (!confirm(`Delete user "${username}"? This can't be undone.`)) return;
+    try {
+      await api.delete('/users/' + id);
+      toast(`User "${username}" deleted`);
+      await this.refreshUsers();
+    } catch (e) {
+      alert('Failed to delete user: ' + e.message);
+    }
+  },
+
   _settingsMenuItemsPage() {
     const items = MenuItems.list();
+    const isAdmin = S.currentUser?.role === 'admin';
     return `
       <div class="field-label" style="margin-bottom:10px;">Sidebar / bottom nav items</div>
+      <p class="mute" style="font-size:var(--text-xs); margin:0 0 10px;">
+        Show/hide and reorder are personal — saved to this browser only.
+        ${isAdmin ? 'The "Viewers can access" toggle is global and applies to every viewer account.' : ''}
+      </p>
       <div class="menu-items-list">
         ${items.map((it, i) => `
           <div class="menu-item-row ${it.hidden ? 'is-hidden' : ''}">
@@ -346,6 +671,13 @@ const App = {
                    aria-label="Show ${esc(it.label)}">
             <span class="nav-ico">${icon(it.icon, 16)}</span>
             <span class="menu-item-label">${esc(it.label)}</span>
+            ${isAdmin ? `
+              <label class="menu-item-access" title="Uncheck to restrict this menu to admins only">
+                <input type="checkbox" ${this._viewerCanAccessMenu(it.id) ? 'checked' : ''}
+                       onchange="App.setMenuAccess('${it.id}', this.checked)">
+                <span>Viewers can access</span>
+              </label>
+            ` : ''}
             <div class="menu-item-sort">
               <button class="icon-btn" style="transform:rotate(-90deg);" ${i === 0 ? 'disabled' : ''}
                       onclick="MenuItems.move('${it.id}',-1);App._refreshSettings()" aria-label="Move ${esc(it.label)} up">
@@ -358,6 +690,25 @@ const App = {
             </div>
           </div>`).join('')}
       </div>`;
+  },
+
+  // Whether a viewer is currently allowed to see menu `id` — used to draw
+  // the checkbox above (independent of _menuAllowed's admin-always-sees-all
+  // bypass, since this reflects the stored setting itself, not "can the
+  // person looking at this page see it").
+  _viewerCanAccessMenu(id) { return S.menuPermissions[id] !== false; },
+
+  async setMenuAccess(id, allowed) {
+    const permissions = { ...S.menuPermissions, [id]: !!allowed };
+    try {
+      const r = await api.put('/menu-permissions', { permissions });
+      S.menuPermissions = r.permissions;
+      const label = NAV.find(n => n.id === id)?.label || id;
+      toast(`${label} is now ${allowed ? 'visible to' : 'restricted from'} viewers`);
+    } catch (e) {
+      alert('Failed to update menu access: ' + e.message);
+    }
+    this._refreshSettings();
   },
 
   _settingsBackupPage() {
