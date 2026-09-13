@@ -75,6 +75,7 @@ const S = {
   backupIntervalDays: 0,        // Settings → Database → Backup — loaded from /api/backup/settings at boot
   exportFormat:  'sql',         // Settings → Database → Export/Import — 'sql' | 'csv'
   users:         null,          // Settings → Access → Users — null until first fetched (admin only)
+  menuPermissions: {},          // { [menuId]: boolean } — global, DB-backed; false = admin-only. Missing key = allowed.
   formItems:     [],            // draft items inside the bin form modal
   // grid picker state (shared for add/edit bin modals)
   grid: {

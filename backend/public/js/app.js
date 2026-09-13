@@ -90,7 +90,7 @@ const App = {
     if (m) { await this.loadConfig(); await this.renderBinScan(m[1]); return; }
 
     await Promise.all([
-      this.loadConfig(), this.loadBackupSettings(),
+      this.loadConfig(), this.loadBackupSettings(), this.loadMenuPermissions(),
       this.loadLocations(), this.loadBoxTypes(),
       this.loadContentTypes(), this.loadBins(),
     ]);
@@ -248,6 +248,25 @@ const App = {
     }
   },
 
+  // Global, admin-configured "can viewers see this menu" map. Failures are
+  // non-fatal: an empty map means nothing is restricted, same as before
+  // this feature existed.
+  async loadMenuPermissions() {
+    try {
+      const r = await api.get('/menu-permissions');
+      S.menuPermissions = (r && r.permissions) || {};
+    } catch (e) {
+      console.warn('Menu permissions fetch failed; using defaults:', e.message);
+    }
+  },
+
+  // Admins always see every menu — this is a viewer restriction, not a
+  // general-purpose lock. Missing/undefined for a menu id means allowed.
+  _menuAllowed(id) {
+    if (S.currentUser?.role === 'admin') return true;
+    return S.menuPermissions[id] !== false;
+  },
+
   async loadLocations()    { S.locations    = await api.get('/locations'); },
   async loadBoxTypes()     { S.boxTypes     = await api.get('/box-types'); },
   async loadContentTypes() { S.contentTypes = await api.get('/content-types'); },
@@ -298,7 +317,7 @@ const App = {
           </div>
         </div>
         <nav>
-          ${MenuItems.visible().map(n => `
+          ${MenuItems.visible().filter(n => this._menuAllowed(n.id)).map(n => `
             <button class="nav-item ${S.tab === n.id ? 'active' : ''}"
                     onclick="App.switchTab('${n.id}')"
                     ${S.tab === n.id ? 'aria-current="page"' : ''}>
@@ -362,6 +381,12 @@ const App = {
   },
 
   renderTab() {
+    // Defense in depth: if the current tab became restricted (an admin
+    // changed menu permissions, or a stale S.tab survived a role change)
+    // fall back to the first menu this account can actually see.
+    if (!this._menuAllowed(S.tab)) {
+      S.tab = MenuItems.visible().find(n => this._menuAllowed(n.id))?.id || 'inventory';
+    }
     switch (S.tab) {
       case 'inventory':     return this.renderInventory();
       case 'locations':     return this.renderLocations();
@@ -631,8 +656,13 @@ const App = {
 
   _settingsMenuItemsPage() {
     const items = MenuItems.list();
+    const isAdmin = S.currentUser?.role === 'admin';
     return `
       <div class="field-label" style="margin-bottom:10px;">Sidebar / bottom nav items</div>
+      <p class="mute" style="font-size:var(--text-xs); margin:0 0 10px;">
+        Show/hide and reorder are personal — saved to this browser only.
+        ${isAdmin ? 'The "Viewers can access" toggle is global and applies to every viewer account.' : ''}
+      </p>
       <div class="menu-items-list">
         ${items.map((it, i) => `
           <div class="menu-item-row ${it.hidden ? 'is-hidden' : ''}">
@@ -641,6 +671,13 @@ const App = {
                    aria-label="Show ${esc(it.label)}">
             <span class="nav-ico">${icon(it.icon, 16)}</span>
             <span class="menu-item-label">${esc(it.label)}</span>
+            ${isAdmin ? `
+              <label class="menu-item-access" title="Uncheck to restrict this menu to admins only">
+                <input type="checkbox" ${this._viewerCanAccessMenu(it.id) ? 'checked' : ''}
+                       onchange="App.setMenuAccess('${it.id}', this.checked)">
+                <span>Viewers can access</span>
+              </label>
+            ` : ''}
             <div class="menu-item-sort">
               <button class="icon-btn" style="transform:rotate(-90deg);" ${i === 0 ? 'disabled' : ''}
                       onclick="MenuItems.move('${it.id}',-1);App._refreshSettings()" aria-label="Move ${esc(it.label)} up">
@@ -653,6 +690,25 @@ const App = {
             </div>
           </div>`).join('')}
       </div>`;
+  },
+
+  // Whether a viewer is currently allowed to see menu `id` — used to draw
+  // the checkbox above (independent of _menuAllowed's admin-always-sees-all
+  // bypass, since this reflects the stored setting itself, not "can the
+  // person looking at this page see it").
+  _viewerCanAccessMenu(id) { return S.menuPermissions[id] !== false; },
+
+  async setMenuAccess(id, allowed) {
+    const permissions = { ...S.menuPermissions, [id]: !!allowed };
+    try {
+      const r = await api.put('/menu-permissions', { permissions });
+      S.menuPermissions = r.permissions;
+      const label = NAV.find(n => n.id === id)?.label || id;
+      toast(`${label} is now ${allowed ? 'visible to' : 'restricted from'} viewers`);
+    } catch (e) {
+      alert('Failed to update menu access: ' + e.message);
+    }
+    this._refreshSettings();
   },
 
   _settingsBackupPage() {

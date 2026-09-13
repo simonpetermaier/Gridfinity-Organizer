@@ -885,6 +885,45 @@ app.put('/api/config', async (req, res) => {
 });
 
 // ============================================================
+// MENU PERMISSIONS — which nav items (Inventory, Drawers, …) 'viewer'
+// accounts are allowed to see. Global (persisted in app_settings, one JSON
+// blob), unlike each browser's own show/hide/reorder preference in
+// localStorage. Admins always see every menu regardless of this setting —
+// it's a viewer restriction, not a way to lock yourself out.
+//
+// This only controls what the nav *offers to navigate to* — it does not
+// itself lock down the underlying REST routes (those already follow the
+// separate GET-for-everyone / mutate-for-admin rule enforced above). A
+// viewer with the URL bar could still reach a restricted page's data by
+// calling its API directly, same as they could without this feature.
+// ============================================================
+app.get('/api/menu-permissions', async (_req, res) => {
+  try {
+    const r = await pool.query(`SELECT value FROM app_settings WHERE key = 'menu_permissions'`);
+    const permissions = r.rows[0] ? JSON.parse(r.rows[0].value) : {};
+    ok(res, { permissions });
+  } catch (e) { err(res, e); }
+});
+
+app.put('/api/menu-permissions', async (req, res) => {
+  const permissions = req.body?.permissions;
+  if (!permissions || typeof permissions !== 'object' || Array.isArray(permissions)) {
+    return res.status(400).json({ error: 'permissions must be an object of {menuId: boolean}' });
+  }
+  if (!Object.values(permissions).every(v => typeof v === 'boolean')) {
+    return res.status(400).json({ error: 'each permission value must be a boolean' });
+  }
+  try {
+    await pool.query(
+      `INSERT INTO app_settings (key, value) VALUES ('menu_permissions', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [JSON.stringify(permissions)]
+    );
+    ok(res, { permissions });
+  } catch (e) { err(res, e); }
+});
+
+// ============================================================
 // DATABASE — backup schedule + manual backup, and export/import.
 // ============================================================
 
